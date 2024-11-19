@@ -386,12 +386,10 @@ def main():
         print("CUDA is not available. Falling back to CPU.")
         device_list = ['cpu'] * num_models
     elif num_gpus > 0:
-        # 分配每个模型到不同的GPU，轮询分配
+        print(f"Training on {num_gpus} GPUs.")
         device_list = [f'cuda:{i % num_gpus}' for i in range(num_models)]
     else:
         device_list = ['cpu'] * num_models
-
-    print(f"Training {num_models} models on devices: {device_list}")
 
     datasets = []  
     optimizers = [] 
@@ -437,7 +435,9 @@ def main():
         thread.join()
     
     end_time = time.time()
-    print(f"Training completed in {end_time - start_time:.2f} seconds.")
+    cost_min = (end_time - start_time) / 60
+    cost_sec = (end_time - start_time) % 60
+    print(f"Training completed in {cost_min:.0f} min {cost_sec:.2f} sec.")
 
     # # 训练完成后进行模型评估
     # for i in range(num_models):

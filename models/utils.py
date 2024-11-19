@@ -5,6 +5,11 @@ import torch
 # Helper function for visualization.
 import matplotlib.pyplot as plt
 import numpy as np
+import math
+
+import torch.nn as nn
+import torch.nn.functional as F
+from torch_geometric.data import Data
 
 
 def parse_cell_txt(file_path):
@@ -175,27 +180,26 @@ def multi_vmf(weights, axes, kappas, w):
     q = torch.clamp(q, min=1e-10, max=1e10)  # Further clamping to avoid extreme values
     return q
 
-def plot_outputs_3d(references, predictions, sizes, save_path=None):
-    # 定义 z 和 phi 的范围
+def plot_outputs_3d(references, predictions, sizes, save_path=None, return_fig=False):
+    # Define z and phi range
     z_min, z_max = -1, 1
     phi_min, phi_max = -np.pi, np.pi
 
-    # 创建用于 3D 绘图的网格
+    # Create a grid for 3D plotting
     z_in = np.linspace(z_min, z_max, sizes[0])
     phi_in = np.linspace(phi_min, phi_max, sizes[1])
-
     Z, Phi = np.meshgrid(z_in, phi_in, indexing='ij')
 
     target_img = references
     predict_img = predictions
 
-    # 确保输入数据的形状与网格匹配
+    # Ensure input data matches grid shape
     if predict_img.shape != Z.shape:
         predict_img = predict_img.reshape(Z.shape)
     if target_img is not None and target_img.shape != Z.shape:
         target_img = target_img.reshape(Z.shape)
 
-    # 设置用于 3D 可视化的子图
+    # Set up subplots for 3D visualization
     if target_img is not None and np.sum(target_img) > 0:
         fig = plt.figure(figsize=(14, 6))
         ax1 = fig.add_subplot(1, 2, 1, projection='3d')
@@ -204,14 +208,14 @@ def plot_outputs_3d(references, predictions, sizes, save_path=None):
         fig = plt.figure(figsize=(10, 6))
         ax1 = fig.add_subplot(1, 1, 1, projection='3d')
 
-    # 绘制预测数据的 3D 曲面
+    # Plot prediction 3D surface
     ax1.plot_surface(Z, Phi, predict_img, rstride=1, cstride=1, cmap='rainbow')
     ax1.set_title('Prediction')
     ax1.set_xlabel('Z')
     ax1.set_ylabel('Phi')
     ax1.set_zlabel('Value')
 
-    # 如果有参考数据，绘制其 3D 曲面
+    # Plot reference 3D surface, if available
     if target_img is not None and np.sum(target_img) > 0:
         ax2.plot_surface(Z, Phi, target_img, rstride=1, cstride=1, cmap='rainbow')
         ax2.set_title('Reference')
@@ -219,17 +223,21 @@ def plot_outputs_3d(references, predictions, sizes, save_path=None):
         ax2.set_ylabel('Phi')
         ax2.set_zlabel('Value')
 
-    # 显示图形
+    # Adjust layout
     plt.tight_layout()
 
+    # Save or return the figure
     if save_path is not None:
         plt.savefig(save_path)
         plt.close()
+    elif return_fig:
+        return fig
     else:
         plt.show()
+
     
 
-def get_gridX(sizes):
+def get_gridX(sizes, device):
     i_idx = torch.arange(sizes[0], dtype=torch.float, device=device) / sizes[0]
     j_idx = torch.arange(sizes[1], dtype=torch.float, device=device) / sizes[1]
     i_grid, j_grid = torch.meshgrid(i_idx, j_idx)
@@ -244,7 +252,7 @@ def get_gridX(sizes):
 
 # 加载 ray 数据的函数
 def load_rawdata(filename, sizes, device, verbose=False):
-    X = get_gridX(sizes)
+    X = get_gridX(sizes, device)
 
     rawdata = np.fromfile(filename, dtype=np.float32)
     rawdata = rawdata.reshape(-1, 4)

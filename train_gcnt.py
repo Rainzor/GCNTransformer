@@ -1,6 +1,7 @@
 # Install required packages.
 import os
 import json
+import argparse
 
 import torch
 import torch.nn as nn
@@ -8,18 +9,16 @@ from torch.nn import Linear
 import torch.nn.functional as F
 from torch.optim import Adam
 
-from torch_geometric.nn import GCNConv
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
-from torch_geometric.utils import to_dense_batch
 
 from torch.utils.data import TensorDataset, random_split
+from torch.utils.tensorboard import SummaryWriter
+
 from tqdm import tqdm
 
 os.environ['TORCH'] = torch.__version__
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f"Using {device} device")
 
 # Helper function for visualization.
 import matplotlib.pyplot as plt
@@ -30,7 +29,7 @@ import time
 from models.model import *
 from models.utils import *
 
-def train_model(model,num_epochs, data_loader, optimizer,scheduler=None):
+def train_model(model, num_epochs, data_loader, device, optimizer, scheduler=None):
     loss_history = []
     with tqdm(total=num_epochs, desc="Training Progress") as pbar:
         for epoch in range(num_epochs):
@@ -43,7 +42,7 @@ def train_model(model,num_epochs, data_loader, optimizer,scheduler=None):
                 optimizer.zero_grad()
 
                 # Forward pass
-                predictions = gcn_transformer(
+                predictions = model(
                     batch_data.x,
                     batch_data.edge_index,
                     batch_data.pos,
@@ -72,17 +71,18 @@ def train_model(model,num_epochs, data_loader, optimizer,scheduler=None):
 def generate_filenames(folder_path, target_file, num_files):
     return [os.path.join(folder_path, f"{i}", target_file) for i in range(num_files)]
 
-def load_dataset_config(base_path, config_file):
-    config_path = os.path.join(base_path, config_file)
+def load_dataset_config(base_path):
+    config_path = os.path.join(base_path, "config.json")
     with open(config_path, 'r') as f:
         return json.load(f)
 
 def main(args):
     # Load dataset configuration
-    dataset_config = load_dataset_config(args.base_path, args.config_file)
-
+    
+    dataset_config = load_dataset_config(args.base_path)
+    device = args.device
     sizes = [64, 64]  # Default grid size
-    X = get_gridX(sizes)
+    X = get_gridX(sizes, device=device)
 
     # Initialize datasets
     datasets = []
@@ -104,18 +104,20 @@ def main(args):
         for i in range(file_num):
             # Load graph data
             parsed_cells = parse_cell_txt(graphs_path[i])
-            graph_data = get_gnn_dataset(parsed_cells, args.device)
+            graph_data = get_gnn_dataset(parsed_cells, device)
             
             # Load target data
-            target_data = load_target_data(target_path[i], args.device)
+            target_data = load_target_data(target_path[i], device)
             graph_data.y = target_data.reshape(-1)  
-            graph_data.batch = torch.zeros(graph_data.num_nodes, dtype=torch.long, device=args.device)
+            graph_data.batch = torch.zeros(graph_data.num_nodes, dtype=torch.long, device=device)
 
             # Load raw data
-            _, ray_data, _ = load_rawdata(rays_path[i], sizes, args.device)
+            _, ray_data, _ = load_rawdata(rays_path[i], sizes, device)
             ray_datasets.append(ray_data)
             
             datasets.append(graph_data)
+    
+    print(f"Loaded {len(datasets)} datasets.")
 
     # Define hyperparameters
     hyperparameters = {
@@ -130,8 +132,8 @@ def main(args):
         'output_dim': 256,
         'num_epochs': args.num_epochs,
         'lr': args.learning_rate,
-        'gamma': 0.9995,
-        'step_size': 10,
+        'gamma': 0.9,
+        'step_size': 500,
         'batch_size': 16
     }
 
@@ -146,7 +148,7 @@ def main(args):
         embedding_dim=hyperparameters['embedding_dim'],
         pos_dim=hyperparameters['pos_dim'],
         dropout=hyperparameters['dropout'],
-    ).to(args.device)
+    ).to(device)
 
     # Initialize optimizer and scheduler
     optimizer = Adam(gcn_transformer.parameters(), lr=hyperparameters['lr'])
@@ -164,7 +166,7 @@ def main(args):
     )
 
     # Training starts from scratch
-    loss_history = train_model(gcn_transformer, hyperparameters['num_epochs'], data_loader, optimizer, scheduler)
+    loss_history = train_model(gcn_transformer, hyperparameters['num_epochs'], data_loader, device, optimizer, scheduler)
     time = time.strftime("%Y_%m_%d_%H_%M", time.localtime())
     model_save_path = os.path.join(args.base_path, f"gnn_parameters_{time}.pth")
 
@@ -182,10 +184,13 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Process dataset configuration and train the GNN model.")
     parser.add_argument("--base_path", type=str, required=True, help="Base path where the datasets and JSON configuration file are located.")
-    parser.add_argument("--config_file", type=str, default="datasets_config.json", help="Name of the JSON configuration file.")
-    parser.add_argument("--device", type=str, default="cuda", help="Device to run the training on (e.g., 'cuda' or 'cpu').")
-    parser.add_argument("--num_epochs", type=int, default=2000, help="Number of training epochs.")
-    parser.add_argument("--learning_rate", type=float, default=5e-4, help="Learning rate for the optimizer.")
+
+
+    default_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    parser.add_argument("--device", type=str, default=default_device, help="Device to run the training on (e.g., 'cuda' or 'cpu').")
+    parser.add_argument("--num_epochs", type=int, default=3000, help="Number of training epochs.")
+    parser.add_argument("--learning_rate", type=float, default=2e-4, help="Learning rate for the optimizer.")
 
     args = parser.parse_args()
     main(args)

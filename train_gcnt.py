@@ -1,4 +1,3 @@
-# Install required packages.
 import os
 import json
 import argparse
@@ -29,6 +28,69 @@ import time
 
 from models.model import *
 from models.utils import *
+
+def generate_filenames(folder_path, target_file, num_files):
+    return [os.path.join(folder_path, f"{i}", target_file) for i in range(num_files)]
+
+def load_dataset_config(base_path):
+    config_path = os.path.join(base_path, "config.json")
+    with open(config_path, 'r') as f:
+        return json.load(f)
+
+def log_sample_plots(model, datasets, X, sizes, writer, tag, num_samples=4, device='cpu'):
+    """
+    Logs 3D plots of predictions vs. references for random samples to TensorBoard.
+    
+    Parameters:
+    - model: The trained model.
+    - datasets: datasets (training or validation).
+    - X: The grid for evaluation.
+    - sizes: Shape of the output images.
+    - writer: TensorBoard SummaryWriter instance.
+    - tag: Tag to differentiate between train and validation.
+    - num_samples: Number of random samples to visualize.
+    - device: The device to run the inference on.
+    """
+    model.eval()
+    random_samples = random.sample(list(datasets), min(num_samples, len(datasets)))
+
+    for idx, sample in enumerate(random_samples):
+        sample = sample.to(device)
+        
+        with torch.no_grad():
+            # Get model predictions
+            weights, mus, kappas = model.vmf_param(
+                sample.x, sample.edge_index, sample.pos, sample.batch
+            )
+            img_predict = multi_vmf(weights.squeeze(), mus.squeeze(), kappas.squeeze(), X).cpu().numpy()
+            img_predict = img_predict.reshape(sizes)
+
+            # Get reference data
+            tgt_w, tgt_m, tgt_k = extract_param(sample.y)
+            img_reference = multi_vmf(tgt_w, tgt_m, tgt_k, X).cpu().numpy()
+            img_reference = img_reference.reshape(sizes)
+
+            # Plot and log to TensorBoard
+            fig = plot_outputs_3d(img_reference, img_predict, sizes, return_fig=True)
+            writer.add_figure(f'{tag}/Sample_{idx}', fig)
+
+def save_checkpoint(model, optimizer, scheduler, epoch, hyperparameters, path):
+    state_dict = model.state_dict()
+    if isinstance(model, nn.DataParallel):
+        state_dict = {k[7:]: v for k, v in state_dict.items() if k.startswith("module.")}
+    
+    checkpoint = {
+        'epoch': epoch,
+        'model_state_dict': state_dict,
+        'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict(),
+        'hyperparameters': hyperparameters
+    }
+
+    torch.save(checkpoint, path)
+    print(f"Model saved to {path}")
+
+
 def train_model(
     model, num_epochs, train_loader, val_loader, device, optimizer, scheduler=None):
     loss_history = {'train': [], 'val': []}
@@ -91,51 +153,6 @@ def train_model(
             pbar.update(1)
             
     return loss_history
-
-def generate_filenames(folder_path, target_file, num_files):
-    return [os.path.join(folder_path, f"{i}", target_file) for i in range(num_files)]
-
-def load_dataset_config(base_path):
-    config_path = os.path.join(base_path, "config.json")
-    with open(config_path, 'r') as f:
-        return json.load(f)
-
-def log_sample_plots(model, datasets, X, sizes, writer, tag, num_samples=4, device='cpu'):
-    """
-    Logs 3D plots of predictions vs. references for random samples to TensorBoard.
-    
-    Parameters:
-    - model: The trained model.
-    - datasets: datasets (training or validation).
-    - X: The grid for evaluation.
-    - sizes: Shape of the output images.
-    - writer: TensorBoard SummaryWriter instance.
-    - tag: Tag to differentiate between train and validation.
-    - num_samples: Number of random samples to visualize.
-    - device: The device to run the inference on.
-    """
-    model.eval()
-    random_samples = random.sample(list(datasets), min(num_samples, len(datasets)))
-
-    for idx, sample in enumerate(random_samples):
-        sample = sample.to(device)
-        
-        with torch.no_grad():
-            # Get model predictions
-            weights, mus, kappas = model.vmf_param(
-                sample.x, sample.edge_index, sample.pos, sample.batch
-            )
-            img_predict = multi_vmf(weights.squeeze(), mus.squeeze(), kappas.squeeze(), X).cpu().numpy()
-            img_predict = img_predict.reshape(sizes)
-
-            # Get reference data
-            tgt_w, tgt_m, tgt_k = extract_param(sample.y)
-            img_reference = multi_vmf(tgt_w, tgt_m, tgt_k, X).cpu().numpy()
-            img_reference = img_reference.reshape(sizes)
-
-            # Plot and log to TensorBoard
-            fig = plot_outputs_3d(img_reference, img_predict, sizes, return_fig=True)
-            writer.add_figure(f'{tag}/Sample_{idx}', fig)
 
 def main(args):
     # Initialize TensorBoard SummaryWriter
@@ -220,6 +237,11 @@ def main(args):
         dropout=hyperparameters['dropout'],
     ).to(device)
 
+    # Check if multiple GPUs are available
+    if torch.cuda.device_count() > 1 and device.type == 'cuda':
+        print(f"Using {torch.cuda.device_count()} GPUs!")
+        gcn_transformer = nn.DataParallel(gcn_transformer)
+
     # Initialize optimizer and scheduler
     optimizer = Adam(gcn_transformer.parameters(), lr=hyperparameters['lr'])
     scheduler = torch.optim.lr_scheduler.StepLR(
@@ -267,16 +289,7 @@ def main(args):
     os.makedirs(output_dir, exist_ok=True)
     model_save_path = os.path.join(output_dir, f"gnn_parameters_{timestamp}.pth")
 
-    checkpoint = {
-        'epoch': hyperparameters['num_epochs'],
-        'model_state_dict': gcn_transformer.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'scheduler_state_dict': scheduler.state_dict(),
-        'hyperparameters': hyperparameters,
-    }
-
-    torch.save(checkpoint, model_save_path)
-    print(f"Model saved to {model_save_path}")
+    save_checkpoint(gcn_transformer, optimizer, scheduler, hyperparameters['num_epochs'], hyperparameters, model_save_path)
 
     # Close the TensorBoard writer
     writer.close()

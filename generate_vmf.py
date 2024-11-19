@@ -350,6 +350,7 @@ def main():
 
     args = parser.parse_args()
 
+    print(f"Training vMF mixture models with the datasets in {args.base_path}") 
     # 初始化参数
     base_path = args.base_path
     num_files = args.num_files
@@ -412,7 +413,7 @@ def main():
 
     # 确定保存路径（基于每个数据文件夹）
     save_paths = [os.path.dirname(f) for f in filenames]
-
+    start_time = time.time()
     # 启动线程进行并行训练
     threads = []
     for i in range(num_models):
@@ -432,6 +433,9 @@ def main():
     # 等待所有线程完成
     for thread in threads:
         thread.join()
+    
+    end_time = time.time()
+    print(f"Training completed in {end_time - start_time:.2f} seconds.")
 
     # # 训练完成后进行模型评估
     # for i in range(num_models):

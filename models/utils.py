@@ -139,7 +139,7 @@ def load_target_data(filename, device):
     """
     datafile = filename
 
-    parameters = torch.load(filename, map_location=device) 
+    parameters = torch.load(filename, map_location=device, weights_only=True)
     w_logits = parameters['w_logits']
     theta_phi = parameters['theta_phi']
     log_kappa = parameters['log_kappa']

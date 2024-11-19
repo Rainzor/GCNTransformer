@@ -194,13 +194,15 @@ class GCNTransformer(nn.Module):
             nn.init.zeros_(self.gcn_to_transformer.bias)
         # Positional Encoder weightare fixed (sinusoidal), no initialization needed
 
-    def forward(self, x, edge_index, p, batch):
+    def forward(self, x, edge_index, p, batch=None):
         """
         x: [total_num_nodes, num_features]
         edge_index: [2, num_edges]
         p: [total_num_nodes, pos_dim], positional features for each node in the range [-1, 1]
         batch: [total_num_nodes], indicating the graph index each node belongs to
         """
+        if batch is None:
+            batch = torch.zeros(x.size(0), dtype=torch.long, device=x.device)
 
         pos_enc = self.positional_encoder(p)  # [total_num_nodes, embedding_dim * pos_dim]
 
@@ -240,15 +242,15 @@ class GCNTransformer(nn.Module):
 
         return out  # [batch_size, output_dim]
 
-    def vmf_param(self, x, edge_index, p, batch):
+    def vmf_param(self, x, edge_index, p, batch=None):
         """
-        计算模型输出的von Mises-Fisher (vMF)分布参数。
+        Computes the von Mises-Fisher (vMF) parameters from the model output.
         
         参数：
-        - x (torch.Tensor): 节点特征矩阵，形状为 [total_num_nodes, num_features]
-        - edge_index (torch.Tensor): 边索引，形状为 [2, num_edges]
-        - p (torch.Tensor): 位置特征，形状为 [total_num_nodes, pos_dim]，范围为 [-1, 1]
-        - batch (torch.Tensor): 批量向量，指示每个节点所属的图，形状为 [total_num_nodes]
+        - x (torch.Tensor): Feature tensor，Shape [total_num_nodes, num_features]
+        - edge_index (torch.Tensor): Edge index tensor，Shape [2, num_edges]
+        - p (torch.Tensor): Positional features tensor，Shape [total_num_nodes, pos_dim]
+        - batch (torch.Tensor): Batch tensor，Shape [total_num_nodes]
         
         返回：
         - weights (torch.Tensor): [batch_size, num_vmf]
@@ -256,31 +258,29 @@ class GCNTransformer(nn.Module):
         - kappas (torch.Tensor): [batch_size, num_vmf]
         """
         with torch.no_grad():
-            # 前向传播，获取模型输出
+            # Forward pass through the model
             out = self(x, edge_index, p, batch)  # [batch_size, output_dim]
             
-            # 确定批量大小和vMF组件的数量
+            # Batch size
             batch_size = out.size(0)  # [batch_size]
             output_dim = out.size(1)  # output_dim = num_vmf * 4
             assert output_dim % 4 == 0, "Output dimension must be divisible by 4 for vMF parameters"
-            num_vmf = output_dim // 4  # 每个图的vMF组件数量
+            num_vmf = output_dim // 4  # vmf parameters: weights, kappas, theta, phi
             
-            # 重塑输出为 [batch_size, num_vmf, 4]
             out = out.view(batch_size, num_vmf, 4)  # [batch_size, num_vmf, 4]
             
-            # 计算vMF参数
+            # Get the vMF parameters
             weights = F.softmax(out[:, :, 0], dim=-1)  # [batch_size, num_vmf]
             kappas = torch.exp(out[:, :, 1])           # [batch_size, num_vmf]
             theta = torch.sigmoid(out[:, :, 2]) * math.pi  # [batch_size, num_vmf]
             phi = torch.sigmoid(out[:, :, 3]) * math.pi * 2  # [batch_size, num_vmf]
             
-            # 将球面坐标（theta, phi）转换为笛卡尔坐标（mu向量）
+            # From spherical to Cartesian coordinates
             cos_theta = torch.cos(theta)  # [batch_size, num_vmf]
             sin_theta = torch.sin(theta)  # [batch_size, num_vmf]
             cos_phi = torch.cos(phi)      # [batch_size, num_vmf]
             sin_phi = torch.sin(phi)      # [batch_size, num_vmf]
             
-            # 组合mu向量： [batch_size, num_vmf, 3]
             mus = torch.stack(
                 (sin_theta * cos_phi, sin_theta * sin_phi, cos_theta),
                 dim=-1

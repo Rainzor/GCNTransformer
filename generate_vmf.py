@@ -382,6 +382,8 @@ def main():
 
     # 获取可用的GPU数量
     num_gpus = torch.cuda.device_count()
+    if num_gpus > 1:
+        num_gpus = int(num_gpus*0.75)
     if num_gpus == 0 and args.device.startswith('cuda'):
         print("CUDA is not available. Falling back to CPU.")
         device_list = ['cpu'] * num_models

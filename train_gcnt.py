@@ -12,10 +12,11 @@ from torch.optim import Adam
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
 
-from torch.utils.data import TensorDataset, random_split
+from torch.utils.data import random_split
 from torch.utils.tensorboard import SummaryWriter
 
 from tqdm import tqdm
+import random
 
 os.environ['TORCH'] = torch.__version__
 
@@ -28,44 +29,67 @@ import time
 
 from models.model import *
 from models.utils import *
+def train_model(
+    model, num_epochs, train_loader, val_loader, device, optimizer, scheduler=None):
+    loss_history = {'train': [], 'val': []}
 
-def train_model(model, num_epochs, data_loader, device, optimizer, scheduler=None):
-    loss_history = []
     with tqdm(total=num_epochs, desc="Training Progress") as pbar:
         for epoch in range(num_epochs):
-            total_loss = 0
-            count = 0
-            # Iterate over pre-loaded data with tqdm for progress visualization
-            for batch_data in data_loader:
-                batch_data = batch_data.to(device)
+            model.train()
+            total_train_loss = 0
+            train_count = 0
 
+            for batch in train_loader:
+                batch = batch.to(device)
                 optimizer.zero_grad()
 
                 # Forward pass
                 predictions = model(
-                    batch_data.x,
-                    batch_data.edge_index,
-                    batch_data.pos,
-                    batch_data.batch
+                    batch.x,
+                    batch.edge_index,
+                    batch.pos,
+                    batch.batch
                 ).reshape(-1)
-                # Compute the loss
-                loss = criterion(predictions, batch_data.y)
 
-                # Backward pass and optimization
+                # Compute loss
+                loss = criterion(predictions, batch.y)
                 loss.backward()
                 optimizer.step()
 
-                total_loss += loss.item()
-                count += 1
-            if scheduler is not None:
+                total_train_loss += loss.item()
+                train_count += 1
+
+            average_train_loss = total_train_loss / train_count
+            loss_history['train'].append(average_train_loss)
+
+            # Validation phase
+            model.eval()
+            total_val_loss = 0
+            val_count = 0
+
+            with torch.no_grad():
+                for batch in val_loader:
+                    batch = batch.to(device)
+                    predictions = model(
+                        batch.x,
+                        batch.edge_index,
+                        batch.pos,
+                        batch.batch
+                    ).reshape(-1)
+
+                    loss = criterion(predictions, batch.y)
+                    total_val_loss += loss.item()
+                    val_count += 1
+
+            average_val_loss = total_val_loss / val_count
+            loss_history['val'].append(average_val_loss)
+
+            if scheduler:
                 scheduler.step()
-            average_loss = total_loss/count
-            loss_history.append(average_loss)
-            pbar.set_postfix({
-                'Loss': f"{average_loss:.6f}"
-            })
+
+            pbar.set_postfix({'Train Loss': f"{average_train_loss:.6f}", 'Val Loss': f"{average_val_loss:.6f}"})
             pbar.update(1)
-        tqdm.write("Training complete!")
+            
     return loss_history
 
 def generate_filenames(folder_path, target_file, num_files):
@@ -76,11 +100,52 @@ def load_dataset_config(base_path):
     with open(config_path, 'r') as f:
         return json.load(f)
 
-def main(args):
-    # Load dataset configuration
+def log_sample_plots(model, datasets, X, sizes, writer, tag, num_samples=4, device='cpu'):
+    """
+    Logs 3D plots of predictions vs. references for random samples to TensorBoard.
     
+    Parameters:
+    - model: The trained model.
+    - datasets: datasets (training or validation).
+    - X: The grid for evaluation.
+    - sizes: Shape of the output images.
+    - writer: TensorBoard SummaryWriter instance.
+    - tag: Tag to differentiate between train and validation.
+    - num_samples: Number of random samples to visualize.
+    - device: The device to run the inference on.
+    """
+    model.eval()
+    random_samples = random.sample(list(datasets), min(num_samples, len(datasets)))
+
+    for idx, sample in enumerate(random_samples):
+        sample = sample.to(device)
+        
+        with torch.no_grad():
+            # Get model predictions
+            weights, mus, kappas = model.vmf_param(
+                sample.x, sample.edge_index, sample.pos, sample.batch
+            )
+            img_predict = multi_vmf(weights.squeeze(), mus.squeeze(), kappas.squeeze(), X).cpu().numpy()
+            img_predict = img_predict.reshape(sizes)
+
+            # Get reference data
+            tgt_w, tgt_m, tgt_k = extract_param(sample.y)
+            img_reference = multi_vmf(tgt_w, tgt_m, tgt_k, X).cpu().numpy()
+            img_reference = img_reference.reshape(sizes)
+
+            # Plot and log to TensorBoard
+            fig = plot_outputs_3d(img_reference, img_predict, sizes, return_fig=True)
+            writer.add_figure(f'{tag}/Sample_{idx}', fig)
+
+def main(args):
+    # Initialize TensorBoard SummaryWriter
+    timestamp = time.strftime("%Y_%m_%d", time.localtime())
+    log_dir = os.path.join(args.base_path, 'tensorboard_logs', f'run_{timestamp}')
+    writer = SummaryWriter(log_dir=log_dir)
+
+    # Load dataset configuration
     dataset_config = load_dataset_config(args.base_path)
-    device = args.device
+    device = torch.device(args.device)
     sizes = [64, 64]  # Default grid size
     X = get_gridX(sizes, device=device)
 
@@ -117,7 +182,12 @@ def main(args):
             
             datasets.append(graph_data)
     
-    print(f"Loaded {len(datasets)} datasets.")
+    # Split dataset into training and validation sets (e.g., 80% train, 20% val)
+    train_size = int(0.8 * len(datasets))
+    val_size = len(datasets) - train_size
+    train_dataset, val_dataset = random_split(datasets, [train_size, val_size])
+
+    print(f"Training on {len(train_dataset)} samples, validating on {len(val_dataset)} samples.")
 
     # Define hyperparameters
     hyperparameters = {
@@ -158,28 +228,59 @@ def main(args):
         step_size=hyperparameters['step_size']
     )
 
-    # Initialize data loader
-    data_loader = DataLoader(
-        datasets,
+    # Initialize data loaders
+    train_loader = DataLoader(
+        train_dataset,
         batch_size=hyperparameters['batch_size'],
         shuffle=True
     )
 
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=hyperparameters['batch_size'],
+        shuffle=False
+    )
+
     # Training starts from scratch
-    loss_history = train_model(gcn_transformer, hyperparameters['num_epochs'], data_loader, device, optimizer, scheduler)
-    time = time.strftime("%Y_%m_%d_%H_%M", time.localtime())
-    model_save_path = os.path.join(args.base_path, f"gnn_parameters_{time}.pth")
+    loss_history = train_model(
+        gcn_transformer,
+        hyperparameters['num_epochs'],
+        train_loader,
+        val_loader,
+        device,
+        optimizer,
+        scheduler    
+    )
+
+    # Log losses to TensorBoard
+    for epoch, train_loss in enumerate(loss_history['train']):
+        writer.add_scalar('Loss/Train', train_loss, epoch)
+    for epoch, val_loss in enumerate(loss_history['val']):
+        writer.add_scalar('Loss/Validation', val_loss, epoch)
+    # Log final sample plots
+    log_sample_plots(gcn_transformer, train_dataset, X, sizes, writer, tag='Train', num_samples=4, device=device)
+    log_sample_plots(gcn_transformer, val_dataset, X, sizes, writer, tag='Validation', num_samples=4, device=device)
+
+    # Save the model checkpoint
+    timestamp = time.strftime("%Y_%m_%d_%H_%M", time.localtime())
+    output_dir = os.path.join(args.base_path, 'outputs')
+    os.makedirs(output_dir, exist_ok=True)
+    model_save_path = os.path.join(output_dir, f"gnn_parameters_{timestamp}.pth")
 
     checkpoint = {
-        'epoch': 0,
+        'epoch': hyperparameters['num_epochs'],
         'model_state_dict': gcn_transformer.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'scheduler_state_dict': scheduler.state_dict(),
         'hyperparameters': hyperparameters,
-        'loss_history': loss_history
     }
 
     torch.save(checkpoint, model_save_path)
+    print(f"Model saved to {model_save_path}")
+
+    # Close the TensorBoard writer
+    writer.close()
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Process dataset configuration and train the GNN model.")

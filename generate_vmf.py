@@ -391,6 +391,8 @@ def main():
     else:
         device_list = ['cpu'] * num_models
 
+    print(f"Training {num_models} models on devices: {device_list}")
+
     datasets = []  
     optimizers = [] 
     models = []

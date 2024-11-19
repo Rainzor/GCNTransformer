@@ -12,6 +12,7 @@ import numpy as np
 
 import threading
 import os
+import sys
 import time
 import argparse
 import math
@@ -236,7 +237,8 @@ def load_rawdata(filename, sizes, device, verbose=False):
     
 
     raw_X = np.column_stack((x, y, z))
-    raw_num = min(4096, raw_X.shape[0])
+    np.random.shuffle(raw_X)
+    raw_num = min(8192, raw_X.shape[0])
     raw_X = raw_X[:raw_num, :]
 
     # 将数据转换为张量
@@ -248,13 +250,13 @@ def load_rawdata(filename, sizes, device, verbose=False):
         print("raw data shape:", raw_data.shape)
     return raw_data, ray_data, X
 
-# 模型训练函数
-def train_model(model_id, vmf, optimizer, dataset, hyperparams, device, save_path=None, cuda_stream = None, verbose=False):
+def train_model(model_id, vmf, optimizer, dataset, hyperparams, device, save_path=None, verbose=False):
     kl_lambda = hyperparams['kl_lambda']
     l1_lambda = hyperparams['l1_lambda']
     l2_lambda = hyperparams['l2_lambda']
     num_epochs = hyperparams['num_epochs']
 
+    # 将数据移动到指定设备
     samples = dataset["samples"].to(device, non_blocking=True)
     target = dataset["target"].to(device, non_blocking=True)
     w_data = dataset["w_data"].to(device, non_blocking=True)
@@ -271,29 +273,22 @@ def train_model(model_id, vmf, optimizer, dataset, hyperparams, device, save_pat
         optimizer.step()
         return loss, loss_dict
 
-
     vmf.train()
 
-    if cuda_stream is not None:
-        with torch.cuda.stream(cuda_stream):
-            for epoch in range(num_epochs):
-                update_model()
-
-    elif verbose:
+    if verbose:
         loss_history = []
-        with tqdm(total=num_epochs, desc=f'Model {model_id} Training') as pbar:
+        with tqdm(total=num_epochs, desc=f'Model {model_id} Training on {device}') as pbar:
             for epoch in range(num_epochs):
-
                 loss, loss_dict = update_model()
                 loss_history.append(loss.item())
                 pbar.set_postfix({
                     'Loss': f'{loss.item():.4f}',
-                    'KL': f'{loss_dict['NLL'].item():.4f}',
-                    'Rec': f'{loss_dict['Rec'].item():.4f}',
-                    'L2': f'{loss_dict['L2'].item():.4f}'
+                    'KL': f'{loss_dict["NLL"].item():.4f}',
+                    'Rec': f'{loss_dict["Rec"].item():.4f}',
+                    'L2': f'{loss_dict["L2"].item():.4f}'
                 })
                 pbar.update(1)
-        
+
         plot_losses(loss_history)
     else:
         for epoch in range(num_epochs):
@@ -304,7 +299,7 @@ def train_model(model_id, vmf, optimizer, dataset, hyperparams, device, save_pat
         model_save_path = os.path.join(save_path, f"vmf_parameters.pth")
         torch.save(vmf.state_dict(), model_save_path)
         print(f"Model {model_id} parameters saved to {model_save_path}")
-    
+
 # 加载模型参数
 def load_model(model_path, num_components, device):
     # 初始化模型
@@ -318,26 +313,17 @@ def load_model(model_path, num_components, device):
     
     return model
 
-import os
-import argparse
-import numpy as np
-import torch
-import threading
-
-# Assume these functions and classes are defined elsewhere
-# from your_module import vMFMixtureModel, load_rawdata, train_model
-
 def generate_filenames(base_path, num_files):
     """Generate a list of file paths."""
-    return [os.path.join(base_path, f"{i}\\rawdataNonSpe.bin") for i in range(1, num_files + 1)]
+    return [os.path.join(base_path, f"{i}/rawdataNonSpe.bin") for i in range(0, num_files)]
 
 def main():
     # Set up command-line argument parsing
     parser = argparse.ArgumentParser(description='Script to train vMF mixture models.')
-    parser.add_argument('--base_path', type=str, default='../datasets/raw_data/foam0',
+    parser.add_argument('--base_path', type=str, default='datasets/raw_data/foam0',
                         help='Base path for data files. Example: datasets/')
-    parser.add_argument('--num_files', type=int, default=14,
-                        help='Number of data files. Default is 14.')
+    parser.add_argument('--num_files', type=int, default=1,
+                        help='Number of data files. Default is 1.')
     parser.add_argument('--num_components', type=int, default=64,
                         help='Number of components in the vMF mixture model. Default is 64.')
     parser.add_argument('--num_epochs', type=int, default=10000,
@@ -352,14 +338,19 @@ def main():
                         help='Learning rate. Default is 5e-3.')
     parser.add_argument('--weight_decay', type=float, default=1e-5,
                         help='Weight decay (for Adam optimizer). Default is 1e-5.')
-    parser.add_argument('--sizes', type=parse_sizes, default=[64, 64],
+    parser.add_argument('--sizes', type=str, default='64,64',
                         help='Sizes as a comma-separated list of integers. Example: "64,64"')
-    parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
+    # 默认设备设为所有可用GPU，如果没有GPU则为CPU
+    if torch.cuda.is_available():
+        default_device = 'cuda'
+    else:
+        default_device = 'cpu'
+    parser.add_argument('--device', type=str, default=default_device,
                         help='Computation device. Defaults to CUDA if available, otherwise CPU.')
 
     args = parser.parse_args()
 
-    # Initialize parameters
+    # 初始化参数
     base_path = args.base_path
     num_files = args.num_files
     num_components = args.num_components
@@ -369,9 +360,10 @@ def main():
     l2_lambda = args.l2_lambda
     learning_rate = args.learning_rate
     weight_decay = args.weight_decay
-    device = args.device
+    # 移除全局device，改为每个模型单独分配
+    # device = args.device
 
-    sizes = args.sizes
+    sizes = [int(s) for s in args.sizes.split(',')]
 
     hyperparams = {
         "kl_lambda": kl_lambda,
@@ -380,21 +372,36 @@ def main():
         "num_epochs": num_epochs
     }
 
+    if not os.path.isdir(base_path):
+        print(f"Error: The base path '{base_path}' does not exist.")
+        sys.exit(1)
+
     filenames = generate_filenames(base_path, num_files)
     num_models = len(filenames)
 
-    cuda_streams = []  # List of CUDA streams
+    # 获取可用的GPU数量
+    num_gpus = torch.cuda.device_count()
+    if num_gpus == 0 and args.device.startswith('cuda'):
+        print("CUDA is not available. Falling back to CPU.")
+        device_list = ['cpu'] * num_models
+    elif num_gpus > 0:
+        # 分配每个模型到不同的GPU，轮询分配
+        device_list = [f'cuda:{i % num_gpus}' for i in range(num_models)]
+    else:
+        device_list = ['cpu'] * num_models
+
     datasets = []  
     optimizers = [] 
     models = []
 
     for i in range(num_models):
+        device = device_list[i]
         vmf = vMFMixtureModel(num_components=num_components).to(device)
         optimizer = torch.optim.Adam(vmf.parameters(), lr=learning_rate, weight_decay=weight_decay)
         models.append(vmf)
         optimizers.append(optimizer)
 
-        # Load the corresponding dataset
+        # 加载对应的数据集
         raw_data, ray_data, X = load_rawdata(filenames[i], sizes, device, verbose=False)
         dataset = {
             "samples": raw_data.clone().detach(),
@@ -402,52 +409,46 @@ def main():
             "w_data": X.clone().detach()
         }
         datasets.append(dataset)
-        cuda_streams.append(torch.cuda.Stream(device=device))
 
-    # Determine save paths (save to corresponding locations based on each data folder)
+    # 确定保存路径（基于每个数据文件夹）
     save_paths = [os.path.dirname(f) for f in filenames]
 
-    # Start threads for parallel training
+    # 启动线程进行并行训练
     threads = []
     for i in range(num_models):
         thread = threading.Thread(
             target=train_model,
             args=(
-                i + 1, models[i], optimizers[i],
+                i, models[i], optimizers[i],
                 datasets[i],
                 hyperparams,
-                device, save_paths[i],
-                cuda_streams[i]
+                device_list[i],
+                save_paths[i]
             )
         )
         threads.append(thread)
         thread.start()
 
-    # Wait for all threads to finish
+    # 等待所有线程完成
     for thread in threads:
         thread.join()
 
-    # After training, generate predictions and plot results for each model
-    for i in range(num_models):
-        model = models[i]
-        dataset = datasets[i]
-        X = dataset["w_data"]
-        reference = dataset["target"]
+    # # 训练完成后进行模型评估
+    # for i in range(num_models):
+    #     model = models[i]
+    #     dataset = datasets[i]
+    #     X = dataset["w_data"]
+    #     reference = dataset["target"]
 
-        with torch.no_grad():
-            model.eval()
-            weights, axes, kappas = model()
-            predictions = multi_vmf(weights, axes, kappas, X).cpu().numpy() 
-            predictions = predictions.reshape(sizes[0], sizes[1])
-            reference_np = reference.cpu().numpy().reshape(sizes[0], sizes[1])
+    #     with torch.no_grad():
+    #         model.eval()
+    #         weights, axes, kappas = model()
+    #         predictions = multi_vmf(weights, axes, kappas, X).cpu().numpy() 
+    #         predictions = predictions.reshape(sizes[0], sizes[1])
+    #         reference_np = reference.cpu().numpy().reshape(sizes[0], sizes[1])
+    #         plot_save_path = os.path.join(save_paths[i], "compare.png")
+    #         plot_outputs_3d(reference_np, predictions, sizes, save_path=plot_save_path)
 
-            # Define the save path for the plot
-            plot_save_path = os.path.join(save_paths[i], "compare.png")
-            
-            # Plot the outputs
-            plot_outputs_3d(reference_np, predictions, sizes, save_path=plot_save_path)
-            print(f"Plot saved to {plot_save_path}")
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
 

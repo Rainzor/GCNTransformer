@@ -221,7 +221,7 @@ def main(args):
         'lr': args.learning_rate,
         'gamma': 0.9,
         'step_size': 500,
-        'batch_size': 16
+        'batch_size': 32
     }
 
     # Initialize model
@@ -240,6 +240,9 @@ def main(args):
     # Check if multiple GPUs are available
     if torch.cuda.device_count() > 1 and device.type == 'cuda':
         print(f"Using {torch.cuda.device_count()} GPUs!")
+        if (hyperparameters['batch_size']%torch.cuda.device_count()) != 0:
+            print("Warning! Batch size should be divisible by the number of GPUs.")
+            hyperparameters['batch_size'] = hyperparameters['batch_size'] - (hyperparameters['batch_size']%torch.cuda.device_count())
         gcn_transformer = nn.DataParallel(gcn_transformer)
 
     # Initialize optimizer and scheduler

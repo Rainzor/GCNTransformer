@@ -251,7 +251,7 @@ def get_gridX(sizes, device):
 
 
 # 加载 ray 数据的函数
-def load_rawdata(filename, sizes, device, verbose=False):
+def load_rawdata(filename, sizes, device='cpu', verbose=False):
     X = get_gridX(sizes, device)
 
     rawdata = np.fromfile(filename, dtype=np.float32)

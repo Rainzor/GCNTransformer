@@ -245,20 +245,19 @@ def main():
         graphs_path = generate_filenames(folder_path, "cells.txt", file_num)
         target_path = generate_filenames(folder_path, "vmf_parameters.pth", file_num)
         rays_path = generate_filenames(folder_path, "rawdataNonSpe.bin", file_num)
-        
+        # data should be in cpu for loading
         for i in range(file_num):
             # Load graph data
             parsed_cells = parse_cell_txt(graphs_path[i])
-            graph_data = get_gnn_dataset(parsed_cells)  # Remove 'device=device'
+            graph_data = get_gnn_dataset(parsed_cells)
             
             # Load target data
-            target_data = load_target_data(target_path[i])  # Remove 'device=device'
+            target_data = load_target_data(target_path[i])
             graph_data.y = target_data.reshape(-1)  
-            graph_data.batch = torch.zeros(graph_data.num_nodes, dtype=torch.long)  # Remove 'device=device'
+            graph_data.batch = torch.zeros(graph_data.num_nodes, dtype=torch.long)
             
             # Load raw data
-            _, ray_data, _ = load_rawdata(rays_path[i], sizes)  # Remove 'device=device'
-            ray_datasets.append(ray_data)
+            _, ray_data, _ = load_rawdata(rays_path[i], sizes)
             
             datasets.append(graph_data)
 
@@ -322,6 +321,7 @@ def main():
         train_dataset,
         batch_size=hyperparameters['batch_size'],
         sampler=train_sampler,
+        num_workers=4,  # Set to 0 for debugging if needed
         pin_memory=True
     )
 
@@ -329,6 +329,7 @@ def main():
         val_dataset,
         batch_size=hyperparameters['batch_size'],
         sampler=val_sampler,
+        num_workers=4,  # Set to 0 for debugging if needed
         pin_memory=True
     )
 

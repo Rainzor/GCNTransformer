@@ -33,7 +33,7 @@ def load_dataset_config(base_path):
     with open(config_path, 'r') as f:
         return json.load(f)
 
-def log_sample_plots(model, datasets, X, sizes, writer, tag, num_samples=4, device='cpu'):
+def log_sample_plots(model, datasets, X, sizes, writer, tag, num_samples=4, device='cpu', epoch=0):
     """
     Logs 3D plots of predictions vs. references for random samples to TensorBoard.
     
@@ -46,6 +46,7 @@ def log_sample_plots(model, datasets, X, sizes, writer, tag, num_samples=4, devi
     - tag: Tag to differentiate between train and validation.
     - num_samples: Number of random samples to visualize.
     - device: The device to run the inference on.
+    - epoch: The current epoch number for logging purposes.
     """
     model.eval()
     random_samples = random.sample(list(datasets), min(num_samples, len(datasets)))
@@ -66,9 +67,11 @@ def log_sample_plots(model, datasets, X, sizes, writer, tag, num_samples=4, devi
             img_reference = multi_vmf(tgt_w, tgt_m, tgt_k, X).cpu().numpy()
             img_reference = img_reference.reshape(sizes)
 
-            # Plot and log to TensorBoard
+            # Plot and log to TensorBoard with epoch information
             fig = plot_outputs_3d(img_reference, img_predict, sizes, return_fig=True)
-            writer.add_figure(f'{tag}/Sample_{idx}', fig)
+            writer.add_figure(f'{tag}/Sample_{idx}_Epoch_{epoch}', fig, global_step=epoch)
+
+    model.train()  # Revert model to training mode
 
 def set_seed(seed):
     """
@@ -208,7 +211,7 @@ def main():
 
     # Load dataset configuration
     dataset_config = load_dataset_config(args.base_path)
-    sizes = [64, 64, 64]  # Default grid size
+    sizes = [64, 64]
     X = get_gridX(sizes, device=device)
 
     # Initialize datasets

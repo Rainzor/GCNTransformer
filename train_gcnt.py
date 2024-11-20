@@ -154,11 +154,6 @@ def train_model(
     return loss_history
 
 def main(args):
-    # Initialize TensorBoard SummaryWriter
-    timestamp = time.strftime("%Y_%m_%d", time.localtime())
-    log_dir = os.path.join(args.base_path, 'tensorboard_logs', f'run_{timestamp}')
-    writer = SummaryWriter(log_dir=log_dir)
-
     # Load dataset configuration
     dataset_config = load_dataset_config(args.base_path)
     device = torch.device(args.device)
@@ -268,6 +263,11 @@ def main(args):
         optimizer,
         scheduler    
     )
+    
+    # Initialize TensorBoard SummaryWriter
+    timestamp = time.strftime("%Y_%m_%d", time.localtime())
+    log_dir = os.path.join(args.base_path, 'tensorboard_logs', f'run_{timestamp}')
+    writer = SummaryWriter(log_dir=log_dir)
 
     # Log losses to TensorBoard
     for epoch, train_loss in enumerate(loss_history['train']):

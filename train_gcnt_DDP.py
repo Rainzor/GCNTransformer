@@ -104,7 +104,8 @@ def save_checkpoint(model, optimizer, scheduler, epoch, hyperparameters, path, i
         is_main (bool): Flag indicating if this is the main process.
     """
     if is_main:
-        state_dict = model.state_dict()
+        # Access the underlying model parameters
+        state_dict = model.module.state_dict() if isinstance(model, DDP) else model.state_dict()
         checkpoint = {
             'epoch': epoch,
             'model_state_dict': state_dict,
@@ -150,28 +151,29 @@ def train_model(
 
             average_train_loss = float(total_train_loss[0] / total_train_loss[1])
 
+            model.eval()
+            total_val_loss = 0
+            val_count = 0
+            with torch.no_grad():
+                for data in val_loader:
+                    data = data.to(device)
+                    predictions = model(
+                         data.x,
+                         data.edge_index,
+                         data.pos,
+                         data.batch
+                    ).reshape(-1)
+                    loss = criterion(predictions, data.y)
+                    total_val_loss += loss.item()
+                    val_count += 1
+            average_val_loss = total_val_loss / val_count
+
+
             if scheduler:
                 scheduler.step()
 
             # Validation phase
             if is_main:
-                model.eval()
-                total_val_loss = 0
-                val_count = 0
-                with torch.no_grad():
-                    for data in val_loader:
-                        data = data.to(device)
-                        predictions = model(
-                            data.x,
-                            data.edge_index,
-                            data.pos,
-                            data.batch
-                        ).reshape(-1)
-                        loss = criterion(predictions, data.y)
-                        total_val_loss += loss.item()
-                        val_count += 1
-
-                average_val_loss = total_val_loss / val_count
                 loss_history['val'].append(average_val_loss)
                 loss_history['train'].append(average_train_loss)
                 pbar.set_postfix({'Train Loss': f"{average_train_loss:.6f}", 'Val Loss': f"{average_val_loss:.6f}"})
@@ -301,11 +303,13 @@ def main():
     val_sampler = DistributedSampler(val_dataset, num_replicas=world_size, rank=rank, shuffle=False)
 
     # Initialize data loaders
+    num_cpus = os.cpu_count()
+    workers_per_process = max(1, num_cpus // (world_size * 2))  # Example heuristic
     train_loader = DataLoader(
         train_dataset,
         batch_size=hyperparameters['batch_size'],
         sampler=train_sampler,
-        num_workers=4,  # Set to 0 for debugging if needed
+        num_workers=workers_per_process,
         pin_memory=True
     )
 
@@ -313,7 +317,7 @@ def main():
         val_dataset,
         batch_size=hyperparameters['batch_size'],
         sampler=val_sampler,
-        num_workers=4,  # Set to 0 for debugging if needed
+        num_workers=workers_per_process,
         pin_memory=True
     )
 

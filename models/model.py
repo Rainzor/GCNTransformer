@@ -175,11 +175,14 @@ class GCNTransformer(nn.Module):
         # Layer normalization after Transformer
         self.ln_post = nn.LayerNorm(transformer_width)
 
+      # Decoder with Batch Normalization
         self.decoder = nn.Sequential(
             nn.Linear(transformer_width, hidden_dim),
-            nn.Sigmoid(),
+            nn.BatchNorm1d(hidden_dim),  # Add Batch Normalization here
+            nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
-            nn.Sigmoid(),
+            nn.BatchNorm1d(hidden_dim),  # Add Batch Normalization here
+            nn.ReLU(),
             nn.Linear(hidden_dim, output_dim)
         )
 

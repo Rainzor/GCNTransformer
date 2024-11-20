@@ -90,7 +90,6 @@ def save_checkpoint(model, optimizer, scheduler, epoch, hyperparameters, path):
     torch.save(checkpoint, path)
     print(f"Model saved to {path}")
 
-
 def train_model(
     model, num_epochs, train_loader, val_loader, device, optimizer, scheduler=None):
     loss_history = {'train': [], 'val': []}
@@ -239,7 +238,7 @@ def main(args):
 
 
     # Initialize optimizer and scheduler
-    optimizer = Adam(gcn_transformer.parameters(), lr=hyperparameters['lr'])
+    optimizer = Adam(gcn_transformer.parameters(), lr=hyperparameters['lr'], weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.StepLR(
         optimizer,
         gamma=hyperparameters['gamma'],
@@ -293,14 +292,13 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Process dataset configuration and train the GNN model.")
-    parser.add_argument("--base_path", type=str, required=True, help="Base path where the datasets and JSON configuration file are located.")
-
+    parser.add_argument("-p", "--base_path", type=str, required=True, help="Base path where the datasets and JSON configuration file are located.")
 
     default_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     parser.add_argument("--device", type=str, default=default_device, help="Device to run the training on (e.g., 'cuda' or 'cpu').")
-    parser.add_argument("--num_epochs", type=int, default=3000, help="Number of training epochs.")
-    parser.add_argument("--learning_rate", type=float, default=2e-4, help="Learning rate for the optimizer.")
+    parser.add_argument("-n", "--num_epochs", type=int, default=3000, help="Number of training epochs.")
+    parser.add_argument("-lr", "--learning_rate", type=float, default=2e-4, help="Learning rate for the optimizer.")
 
     args = parser.parse_args()
     main(args)

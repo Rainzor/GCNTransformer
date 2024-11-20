@@ -337,8 +337,8 @@ def main():
             writer.add_scalar('Loss/Validation', val_loss, epoch)
         
         # Log final sample plots
-        log_sample_plots(model.module, train_dataset, X, sizes, writer, tag='Train', num_samples=4, device=device, epoch=hyperparameters['num_epochs']-1)
-        log_sample_plots(model.module, val_dataset, X, sizes, writer, tag='Validation', num_samples=4, device=device, epoch=hyperparameters['num_epochs']-1)
+        log_sample_plots(model.module, train_dataset, X, sizes, writer, tag='Train', num_samples=4, device=device)
+        log_sample_plots(model.module, val_dataset, X, sizes, writer, tag='Validation', num_samples=4, device=device)
 
         # Save the model checkpoint
         timestamp = time.strftime("%Y_%m_%d_%H_%M", time.localtime())

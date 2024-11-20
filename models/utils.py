@@ -240,7 +240,7 @@ def plot_outputs_3d(references, predictions, sizes, save_path=None, return_fig=F
 def get_gridX(sizes, device):
     i_idx = torch.arange(sizes[0], dtype=torch.float, device=device) / sizes[0]
     j_idx = torch.arange(sizes[1], dtype=torch.float, device=device) / sizes[1]
-    i_grid, j_grid = torch.meshgrid(i_idx, j_idx)
+    i_grid, j_grid = torch.meshgrid(i_idx, j_idx, indexing='ij')
     pos_x = i_grid * 2 - 1
     pos_phi = (j_grid * 2 - 1) * np.pi
     pos_r = torch.sqrt(1 - pos_x**2)

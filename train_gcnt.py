@@ -220,7 +220,7 @@ def main(args):
         'lr': args.learning_rate,
         'gamma': 0.9,
         'step_size': 500,
-        'batch_size': 32
+        'batch_size': args.batch_size
     }
 
     # Initialize model
@@ -299,6 +299,7 @@ if __name__ == "__main__":
     parser.add_argument("--device", type=str, default=default_device, help="Device to run the training on (e.g., 'cuda' or 'cpu').")
     parser.add_argument("-n", "--num_epochs", type=int, default=3000, help="Number of training epochs.")
     parser.add_argument("-lr", "--learning_rate", type=float, default=2e-4, help="Learning rate for the optimizer.")
+    parser.add_argument('-b', '--batch_size', type=int, default=8, help='Batch size per GPU')
 
     args = parser.parse_args()
     main(args)

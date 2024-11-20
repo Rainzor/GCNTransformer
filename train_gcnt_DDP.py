@@ -364,11 +364,11 @@ def parse_args():
         argparse.Namespace: Parsed arguments.
     """
     parser = argparse.ArgumentParser(description="Distributed Data Parallel Training")
-    parser.add_argument('--base_path', type=str, required=True, help='Base path for data and outputs')
-    parser.add_argument('--device', type=str, default='cuda', help='Device to use for training')
-    parser.add_argument('--num_epochs', type=int, default=100, help='Number of training epochs')
-    parser.add_argument('--learning_rate', type=float, default=1e-3, help='Learning rate')
-    parser.add_argument('--batch_size', type=int, default=8, help='Batch size per GPU')
+    parser.add_argument('-p','--base_path', type=str, required=True, help='Base path for data and outputs')
+    parser.add_argument('-d','--device', type=str, default='cuda', help='Device to use for training')
+    parser.add_argument('-n','--num_epochs', type=int, default=100, help='Number of training epochs')
+    parser.add_argument('-lr','--learning_rate', type=float, default=1e-3, help='Learning rate')
+    parser.add_argument('-b','--batch_size', type=int, default=8, help='Batch size per GPU')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
     return parser.parse_args()
 

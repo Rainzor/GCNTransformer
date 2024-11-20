@@ -212,7 +212,6 @@ def main():
     # Load dataset configuration
     dataset_config = load_dataset_config(args.base_path)
     sizes = [64, 64]
-    X = get_gridX(sizes, device=device)
 
     # Initialize datasets
     datasets = []
@@ -340,6 +339,7 @@ def main():
             writer.add_scalar('Loss/Validation', val_loss, epoch)
         
         # Log final sample plots
+        X = get_gridX(sizes, device=device)
         log_sample_plots(model.module, train_dataset, X, sizes, writer, tag='Train', num_samples=4, device=device)
         log_sample_plots(model.module, val_dataset, X, sizes, writer, tag='Validation', num_samples=4, device=device)
 

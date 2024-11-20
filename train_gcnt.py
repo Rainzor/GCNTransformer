@@ -265,7 +265,7 @@ def main(args):
     )
     
     # Initialize TensorBoard SummaryWriter
-    timestamp = time.strftime("%Y_%m_%d", time.localtime())
+    timestamp = time.strftime("%Y_%m_%d_%H_%M", time.localtime())
     log_dir = os.path.join(args.base_path, 'tensorboard_logs', f'run_{timestamp}')
     writer = SummaryWriter(log_dir=log_dir)
 

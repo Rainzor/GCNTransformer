@@ -229,7 +229,6 @@ def main():
     # Load dataset configuration
     dataset_config = load_dataset_config(args.base_path)
     sizes = [64, 64]  # Default grid size
-    X = get_gridX(sizes, device=device)
 
     # Initialize datasets
     datasets = []
@@ -247,22 +246,22 @@ def main():
         target_path = generate_filenames(folder_path, "vmf_parameters.pth", file_num)
         rays_path = generate_filenames(folder_path, "rawdataNonSpe.bin", file_num)
         
-        # Load data for each file
         for i in range(file_num):
             # Load graph data
             parsed_cells = parse_cell_txt(graphs_path[i])
-            graph_data = get_gnn_dataset(parsed_cells, device)
+            graph_data = get_gnn_dataset(parsed_cells)  # Remove 'device=device'
             
             # Load target data
-            target_data = load_target_data(target_path[i], device)
+            target_data = load_target_data(target_path[i])  # Remove 'device=device'
             graph_data.y = target_data.reshape(-1)  
-            graph_data.batch = torch.zeros(graph_data.num_nodes, dtype=torch.long, device=device)
-
+            graph_data.batch = torch.zeros(graph_data.num_nodes, dtype=torch.long)  # Remove 'device=device'
+            
             # Load raw data
-            _, ray_data, _ = load_rawdata(rays_path[i], sizes, device)
+            _, ray_data, _ = load_rawdata(rays_path[i], sizes)  # Remove 'device=device'
             ray_datasets.append(ray_data)
             
             datasets.append(graph_data)
+
     
     # Split dataset into training and validation sets (e.g., 80% train, 20% val)
     train_size = int(0.8 * len(datasets))
@@ -323,7 +322,6 @@ def main():
         train_dataset,
         batch_size=hyperparameters['batch_size'],
         sampler=train_sampler,
-        num_workers=4,
         pin_memory=True
     )
 
@@ -331,7 +329,6 @@ def main():
         val_dataset,
         batch_size=hyperparameters['batch_size'],
         sampler=val_sampler,
-        num_workers=4,
         pin_memory=True
     )
 
@@ -343,7 +340,7 @@ def main():
         val_loader,
         device,
         optimizer,
-        scheduler,
+        scheduler=scheduler,
         is_main=is_main,
         train_sampler=train_sampler
     )
@@ -357,6 +354,7 @@ def main():
         for epoch, val_loss in enumerate(loss_history['val']):
             writer.add_scalar('Loss/Validation', val_loss, epoch)
         # Log final sample plots
+        X = get_gridX(sizes, device=device)
         log_sample_plots(model.module, train_dataset, X, sizes, writer, tag='Train', num_samples=4, device=device)
         log_sample_plots(model.module, val_dataset, X, sizes, writer, tag='Validation', num_samples=4, device=device)
 

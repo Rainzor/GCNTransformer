@@ -92,7 +92,7 @@ def sort_nodes_and_edges(node_features_np: np.ndarray, edges_np: np.ndarray):
 
     return sorted_node_features_np, sorted_edges
 
-def get_gnn_dataset(cells, device):
+def get_gnn_dataset(cells, device='cpu'):
     """
     根据解析后的cells数据构建GNN数据集
     Args:
@@ -133,7 +133,7 @@ def get_gnn_dataset(cells, device):
 
     return data
 
-def load_target_data(filename, device):
+def load_target_data(filename, device='cpu'):
     """
     Loads ray data from parameter file.
     """

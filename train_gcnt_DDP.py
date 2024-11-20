@@ -115,24 +115,6 @@ def save_checkpoint(model, optimizer, scheduler, epoch, hyperparameters, path, i
 
 def train_model(
     model, num_epochs, train_loader, val_loader, device, optimizer, scheduler=None, is_main=True, train_sampler=None):
-    """
-    Train the model.
-
-    Args:
-        model (torch.nn.Module): The model to train.
-        num_epochs (int): Number of epochs to train.
-        train_loader (DataLoader): DataLoader for training data.
-        val_loader (DataLoader): DataLoader for validation data.
-        device (torch.device): The device to train on.
-        optimizer (torch.optim.Optimizer): The optimizer.
-        scheduler (torch.optim.lr_scheduler, optional): Learning rate scheduler.
-        is_main (bool, optional): Flag indicating if this is the main process.
-        train_sampler (DistributedSampler, optional): Sampler for training data.
-        val_sampler (DistributedSampler, optional): Sampler for validation data.
-
-    Returns:
-        dict: Dictionary containing training and validation loss histories.
-    """
     loss_history = {'train': [], 'val': []}
 
     with tqdm(total=num_epochs, desc="Training Progress", disable=not is_main) as pbar:
@@ -163,8 +145,6 @@ def train_model(
                 total_train_loss[0] += loss.item()
                 total_train_loss[1] += 1
 
-
-            dist.all_reduce(total_train_loss, op=dist.ReduceOp.SUM)
             average_train_loss = float(total_train_loss[0] / total_train_loss[1])
 
             if scheduler:
@@ -184,7 +164,8 @@ def train_model(
                             data.pos,
                             data.batch
                         ).reshape(-1)
-                        total_val_loss += criterion(predictions, data.y).item()
+                        loss = criterion(predictions, data.y)
+                        total_val_loss += loss.item()
                         val_count += 1
 
                 average_val_loss = total_val_loss / val_count
@@ -192,6 +173,7 @@ def train_model(
                 loss_history['train'].append(average_train_loss)
                 pbar.set_postfix({'Train Loss': f"{average_train_loss:.6f}", 'Val Loss': f"{average_val_loss:.6f}"})
                 pbar.update(1)
+
             dist.barrier()
 
     return loss_history

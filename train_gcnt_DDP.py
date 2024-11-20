@@ -174,8 +174,6 @@ def train_model(
                 pbar.set_postfix({'Train Loss': f"{average_train_loss:.6f}", 'Val Loss': f"{average_val_loss:.6f}"})
                 pbar.update(1)
 
-            dist.barrier()
-
     return loss_history
 
 def main():
@@ -184,7 +182,7 @@ def main():
     # Initialize the process group
     init_process_group(backend='nccl')
     
-    # Retrieve the rank and world size from environment variables
+    # Retrieve rank and world size from environment variables
     rank = int(os.environ['RANK'])
     world_size = int(os.environ['WORLD_SIZE'])
     local_rank = int(os.environ['LOCAL_RANK'])  # Typically used to assign the correct GPU
@@ -202,7 +200,7 @@ def main():
     if is_main:
         print(f"Running DDP on {world_size} GPU(s).")
         # Initialize TensorBoard SummaryWriter only in the main process
-        timestamp = time.strftime("%Y_%m_%d", time.localtime())
+        timestamp = time.strftime("%Y_%m_%d_%H_%M", time.localtime())
         log_dir = os.path.join(args.base_path, 'tensorboard_logs', f'run_{timestamp}')
         writer = SummaryWriter(log_dir=log_dir)
     else:
@@ -210,7 +208,8 @@ def main():
 
     # Load dataset configuration
     dataset_config = load_dataset_config(args.base_path)
-    sizes = [64, 64]  # Default grid size
+    sizes = [64, 64, 64]  # Default grid size
+    X = get_gridX(sizes, device=device)
 
     # Initialize datasets
     datasets = []
@@ -227,7 +226,8 @@ def main():
         graphs_path = generate_filenames(folder_path, "cells.txt", file_num)
         target_path = generate_filenames(folder_path, "vmf_parameters.pth", file_num)
         rays_path = generate_filenames(folder_path, "rawdataNonSpe.bin", file_num)
-        # data should be in cpu for loading
+        
+        # Load data for each file
         for i in range(file_num):
             # Load graph data
             parsed_cells = parse_cell_txt(graphs_path[i])
@@ -237,13 +237,13 @@ def main():
             target_data = load_target_data(target_path[i])
             graph_data.y = target_data.reshape(-1)  
             graph_data.batch = torch.zeros(graph_data.num_nodes, dtype=torch.long)
-            
+
             # Load raw data
             _, ray_data, _ = load_rawdata(rays_path[i], sizes)
+            ray_datasets.append(ray_data)
             
             datasets.append(graph_data)
 
-    
     # Split dataset into training and validation sets (e.g., 80% train, 20% val)
     train_size = int(0.8 * len(datasets))
     val_size = len(datasets) - train_size
@@ -283,8 +283,8 @@ def main():
         dropout=hyperparameters['dropout'],
     ).to(device)
 
-    # Wrap the model with DDP
-    model = DDP(model, device_ids=[local_rank], output_device=local_rank)
+    # Wrap the model with DDP, enable find_unused_parameters=True
+    model = DDP(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True)
 
     # Initialize optimizer and scheduler
     optimizer = Adam(model.parameters(), lr=hyperparameters['lr'], weight_decay=1e-4)
@@ -328,7 +328,6 @@ def main():
         train_sampler=train_sampler
     )
 
-
     # Only the main process logs to TensorBoard and saves checkpoints
     if is_main:
         # Log losses to TensorBoard
@@ -336,10 +335,10 @@ def main():
             writer.add_scalar('Loss/Train', train_loss, epoch)
         for epoch, val_loss in enumerate(loss_history['val']):
             writer.add_scalar('Loss/Validation', val_loss, epoch)
+        
         # Log final sample plots
-        X = get_gridX(sizes, device=device)
-        log_sample_plots(model.module, train_dataset, X, sizes, writer, tag='Train', num_samples=4, device=device)
-        log_sample_plots(model.module, val_dataset, X, sizes, writer, tag='Validation', num_samples=4, device=device)
+        log_sample_plots(model.module, train_dataset, X, sizes, writer, tag='Train', num_samples=4, device=device, epoch=hyperparameters['num_epochs']-1)
+        log_sample_plots(model.module, val_dataset, X, sizes, writer, tag='Validation', num_samples=4, device=device, epoch=hyperparameters['num_epochs']-1)
 
         # Save the model checkpoint
         timestamp = time.strftime("%Y_%m_%d_%H_%M", time.localtime())
@@ -354,7 +353,6 @@ def main():
 
     # Clean up the process group
     destroy_process_group()
-
 def parse_args():
     """
     Parse command-line arguments.

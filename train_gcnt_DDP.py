@@ -164,8 +164,8 @@ def train_model(
                 total_train_loss[1] += 1
 
 
-            dist.all_reduce(total_loss, op=dist.ReduceOp.SUM)
-            average_train_loss = float(total_loss[0] / total_loss[1])
+            dist.all_reduce(total_train_loss, op=dist.ReduceOp.SUM)
+            average_train_loss = float(total_train_loss[0] / total_train_loss[1])
 
             if scheduler:
                 scheduler.step()

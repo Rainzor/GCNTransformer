@@ -148,6 +148,7 @@ def train_model(
                 total_train_loss[0] += loss.item()
                 total_train_loss[1] += 1
 
+            dist.all_reduce(total_train_loss, op=dist.ReduceOp.SUM)
             average_train_loss = float(total_train_loss[0] / total_train_loss[1])
 
             if scheduler:
@@ -176,6 +177,8 @@ def train_model(
                 loss_history['train'].append(average_train_loss)
                 pbar.set_postfix({'Train Loss': f"{average_train_loss:.6f}", 'Val Loss': f"{average_val_loss:.6f}"})
                 pbar.update(1)
+            
+            dist.barrier()  # Ensure all processes have finished before logging
 
     return loss_history
 
@@ -229,7 +232,7 @@ def main():
         target_path = generate_filenames(folder_path, "vmf_parameters.pth", file_num)
         rays_path = generate_filenames(folder_path, "rawdataNonSpe.bin", file_num)
         
-        # Load data for each file
+        # Load data for each file 
         for i in range(file_num):
             # Load graph data
             parsed_cells = parse_cell_txt(graphs_path[i])

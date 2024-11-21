@@ -266,7 +266,10 @@ def main(args):
     
     # Initialize TensorBoard SummaryWriter
     timestamp = time.strftime("%Y_%m_%d_%H_%M", time.localtime())
-    log_dir = os.path.join(args.base_path, 'tensorboard_logs', f'run_{timestamp}')
+    if(args.model == ""):
+        log_dir = os.path.join(args.base_path, 'tensorboard_logs', f'run_{timestamp}')
+    else:
+        log_dir = os.path.join(args.base_path, 'tensorboard_logs', f'run_{args.model}_{timestamp}')
     writer = SummaryWriter(log_dir=log_dir)
 
     # Log losses to TensorBoard
@@ -282,7 +285,10 @@ def main(args):
     timestamp = time.strftime("%Y_%m_%d_%H_%M", time.localtime())
     output_dir = os.path.join(args.base_path, 'outputs')
     os.makedirs(output_dir, exist_ok=True)
-    model_save_path = os.path.join(output_dir, f"gnn_parameters_{timestamp}.pth")
+    if(args.model == ""):
+        model_save_path = os.path.join(output_dir, f"gcn_transformer_{timestamp}.pth")
+    else:
+        model_save_path = os.path.join(output_dir, f"{args.model}_{timestamp}.pth")
 
     save_checkpoint(gcn_transformer, optimizer, scheduler, hyperparameters['num_epochs'], hyperparameters, model_save_path)
 
@@ -300,6 +306,6 @@ if __name__ == "__main__":
     parser.add_argument("-n", "--num_epochs", type=int, default=3000, help="Number of training epochs.")
     parser.add_argument("-lr", "--learning_rate", type=float, default=2e-4, help="Learning rate for the optimizer.")
     parser.add_argument('-b', '--batch_size', type=int, default=8, help='Batch size per GPU')
-
+    parser.add_argument("--model", type=str, default="", help="Name to train (e.g., 'gcn_transformer').")
     args = parser.parse_args()
     main(args)

@@ -51,47 +51,74 @@ class PositionalEncoder(nn.Module):
 
 
 # GCN Module with Residual Connections
-class GCN(nn.Module):
+# class GCN(nn.Module):
+#     def __init__(self, num_features, hidden_channels):
+#         super(GCN, self).__init__()
+#         torch.manual_seed(12345)
+#         # GCN Layers
+#         self.conv1 = GCNConv(num_features, hidden_channels)
+#         self.conv2 = GCNConv(hidden_channels, hidden_channels)
+#         self.conv3 = GCNConv(hidden_channels, hidden_channels)
+#         self.skip1 = nn.Linear(num_features, hidden_channels) if num_features != hidden_channels else nn.Identity()
+#         self.skip2 = nn.Identity()
+#         self.skip3 = nn.Identity()
+
+#     def forward(self, x, edge_index):
+#         # First Layer with Skip Connection
+#         residual = self.skip1(x)
+#         x = self.conv1(x, edge_index)
+#         x = F.relu(x + residual)
+#         x = F.dropout(x, p=0.3, training=self.training)
+        
+#         # Second Layer with Skip Connection
+#         residual = self.skip2(x)
+#         x = self.conv2(x, edge_index)
+#         x = F.relu(x + residual)
+#         x = F.dropout(x, p=0.3, training=self.training)
+        
+#         # Third Layer with Skip Connection
+#         residual = self.skip3(x)
+#         x = self.conv3(x, edge_index)
+#         x = F.relu(x + residual)
+#         x = F.dropout(x, p=0.3, training=self.training)
+        
+#         return x
+
+#     def reset_parameters(self):
+#         self.conv1.reset_parameters()
+#         self.conv2.reset_parameters()
+#         self.conv3.reset_parameters()
+#         if isinstance(self.skip1, nn.Linear):
+#             self.skip1.reset_parameters()
+
+class GCN(torch.nn.Module):
     def __init__(self, num_features, hidden_channels):
         super(GCN, self).__init__()
         torch.manual_seed(12345)
-        # GCN Layers
         self.conv1 = GCNConv(num_features, hidden_channels)
         self.conv2 = GCNConv(hidden_channels, hidden_channels)
         self.conv3 = GCNConv(hidden_channels, hidden_channels)
-        self.skip1 = nn.Linear(num_features, hidden_channels) if num_features != hidden_channels else nn.Identity()
-        self.skip2 = nn.Identity()
-        self.skip3 = nn.Identity()
 
     def forward(self, x, edge_index):
-        # First Layer with Skip Connection
-        residual = self.skip1(x)
         x = self.conv1(x, edge_index)
-        x = F.relu(x + residual)
+        x = x.relu()
         x = F.dropout(x, p=0.3, training=self.training)
-        
-        # Second Layer with Skip Connection
-        residual = self.skip2(x)
         x = self.conv2(x, edge_index)
-        x = F.relu(x + residual)
+        x = x.relu()
         x = F.dropout(x, p=0.3, training=self.training)
-        
-        # Third Layer with Skip Connection
-        residual = self.skip3(x)
         x = self.conv3(x, edge_index)
-        x = F.relu(x + residual)
+        x = x.relu()
         x = F.dropout(x, p=0.3, training=self.training)
         
         return x
-
+    
     def reset_parameters(self):
         self.conv1.reset_parameters()
         self.conv2.reset_parameters()
         self.conv3.reset_parameters()
-        if isinstance(self.skip1, nn.Linear):
-            self.skip1.reset_parameters()
+        self.lin.reset_parameters()
 
- 
+
 class GELU(nn.Module):
     def __init__(self):
         super(GELU, self).__init__()

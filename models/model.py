@@ -238,7 +238,7 @@ class GCNTransformer(nn.Module):
         x_dense = x_dense.permute(1, 0, 2)  # [1 + max_num_nodes, batch_size, transformer_width]
 
         # Initialize the attention mask with causal masking
-        attn_mask = torch.triu(torch.ones(seq_length, seq_length, device=device), diagonal=1).bool()
+        attn_mask = torch.triu(torch.ones(max_num_nodes+1, max_num_nodes+1, device=x.device), diagonal=1).bool()
 
         # Allow [CLS] token (first token) to attend to all tokens
         attn_mask[0, :] = False  # [CLS] can attend to all tokens including itself

@@ -239,11 +239,12 @@ class GCNTransformer(nn.Module):
 
         # Initialize the attention mask with causal masking
         attn_mask = torch.triu(torch.ones(max_num_nodes+1, max_num_nodes+1, device=x.device), diagonal=1).bool()
-        # attn_mask = None
 
         # Allow [CLS] token (first token) to attend to all tokens
         attn_mask[0, :] = False  # [CLS] can attend to all tokens including itself
         attn_mask[1:, 0] = True  # The other tokens cannot attend to [CLS]
+
+        attn_mask = None
 
         # Forward pass through Transformer
         x_transformed = self.transformer(x_dense, 

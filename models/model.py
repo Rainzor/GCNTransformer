@@ -94,12 +94,13 @@ class PositionalEncoder(nn.Module):
 class GCN(torch.nn.Module):
     def __init__(self, num_features, hidden_channels):
         super(GCN, self).__init__()
-        torch.manual_seed(12345)
-        self.conv1 = GCNConv(num_features, hidden_channels)
+        self.proj = nn.Linear(num_features, hidden_channels)
+        self.conv1 = GCNConv(hidden_channels, hidden_channels)
         self.conv2 = GCNConv(hidden_channels, hidden_channels)
         self.conv3 = GCNConv(hidden_channels, hidden_channels)
 
     def forward(self, x, edge_index):
+        x = self.proj(x)
         x = self.conv1(x, edge_index)
         x = x.relu()
         x = F.dropout(x, p=0.3, training=self.training)
@@ -117,6 +118,33 @@ class GCN(torch.nn.Module):
         self.conv2.reset_parameters()
         self.conv3.reset_parameters()
         self.lin.reset_parameters()
+
+class GraphSAGE(torch.nn.Module):
+    def __init__(self, num_features, hidden_channels):
+        super(GraphSAGE, self).__init__()
+        self.proj = nn.Linear(num_features, hidden_channels)
+        self.conv1 = SAGEConv(hidden_channels, hidden_channels)
+        self.conv2 = SAGEConv(hidden_channels, hidden_channels)
+        self.conv3 = SAGEConv(hidden_channels, hidden_channels)
+
+    def forward(self, x, edge_index):
+        x = self.proj(x)
+        x = self.conv1(x, edge_index)
+        x = x.relu()
+        x = F.dropout(x, p=0.3, training=self.training)
+        x = self.conv2(x, edge_index)
+        x = x.relu()
+        x = F.dropout(x, p=0.3, training=self.training)
+        x = self.conv3(x, edge_index)
+        x = x.relu()
+        x = F.dropout(x, p=0.3, training=self.training)
+        
+        return x
+    
+    def reset_parameters(self):
+        self.conv1.reset_parameters()
+        self.conv2.reset_parameters()
+        self.conv3.reset_parameters()
 
 
 class GELU(nn.Module):
@@ -193,7 +221,7 @@ class GCNTransformer(nn.Module):
         self.positional_encoder = PositionalEncoder(L=embedding_dim)
 
         # GCN module
-        self.gcn = GCN(num_features + embedding_dim*pos_dim, embedding_dim)
+        self.gcn = GraphSAGE(num_features + embedding_dim*pos_dim, embedding_dim)
 
         # [CLS] token as a learnable embedding
         self.cls_token = nn.Parameter(torch.zeros(1, 1, transformer_width))

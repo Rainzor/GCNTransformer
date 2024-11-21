@@ -307,8 +307,8 @@ class GCNTransformer(nn.Module):
         # Permute back to (batch_size, sequence_length, embedding_dim)
         x_transformed = x_transformed.permute(1, 0, 2)  # [batch_size, max_num_nodes, transformer_width]
 
-        graph_features = torch.mean(x_transformed, dim=1)  # [batch_size, transformer_width]
-        # graph_features = x_transformed[:, -1, :]  # [batch_size, transformer_width]
+        # graph_features = torch.mean(x_transformed, dim=1)  # [batch_size, transformer_width]
+        graph_features = x_transformed[:, -1, :]  # [batch_size, transformer_width]
 
         # Extract the graph's features
         cls_features = self.ln_post(graph_features)  # [batch_size, transformer_width]

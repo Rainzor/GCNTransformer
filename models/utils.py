@@ -13,18 +13,17 @@ from torch_geometric.data import Data
 
 
 def parse_cell_txt(file_path):
-    cells = []  # 用于存储解析后的数据
+    cells = []
 
     with open(file_path, 'r') as f:
         lines = f.readlines()
 
     for i in range(0, len(lines), 3):
-        # 每三行表示一个cell的数据
         center_line = lines[i].strip()
         cell_neighbors_line = lines[i + 1].strip()
         node_neighbors_line = lines[i + 2].strip()
 
-        # 解析中心位置和半径
+        # Parse cell center data
         center_data = list(map(float, center_line.split()))
         cell_center = {
             "x": center_data[0],
@@ -33,42 +32,37 @@ def parse_cell_txt(file_path):
             "radius": center_data[3]
         }
 
-        # 解析cell的连接关系
         cell_neighbors = list(map(int, cell_neighbors_line.split()))
 
-        # 解析node的连接关系
         node_neighbors = list(map(int, node_neighbors_line.split()))
 
-        # 组合到一个字典
         cell = {
             "cell_center": cell_center,
             "cell_neighbors": cell_neighbors,
             "node_neighbors": node_neighbors
         }
 
-        # 添加到结果列表
         cells.append(cell)
 
     return cells
 
 def sort_nodes_and_edges(node_features_np: np.ndarray, edges_np: np.ndarray):
     """
-    对节点按 (r, x, phi) 排序，并更新边的索引。
-
+    Sorts nodes and edges based on spherical coordinates (r, x, phi).
     Args:
-        node_features (numpy.ndarray): 节点特征，形状为 [num_nodes, feature_dim]。
-        edges (numpy.ndarray): 边列表，形状为 [2, num_edges]。
+        node_features (numpy.ndarray): num_nodes, feature_dim]
+        edges (numpy.ndarray): [2, num_edges]
 
     Returns:
-        sorted_node_features: 排序后的节点特征 (torch.Tensor)。
-        sorted_edges: 排序后的边索引 (torch.Tensor)。
+        sorted_node_features
+        sorted_edges
     """
-    # 提取 x, y, z 坐标
+    # Extract x, y, z from node features
     x = node_features_np[:, 0]
     y = node_features_np[:, 1]
     z = node_features_np[:, 2]
 
-    # 计算球坐标
+    # Convert to spherical coordinates (r, x, phi)
     r = np.sqrt(x**2 + y**2 + z**2)
     phi = np.arctan2(z, y) % (2 * np.pi)
 
@@ -94,11 +88,11 @@ def sort_nodes_and_edges(node_features_np: np.ndarray, edges_np: np.ndarray):
 
 def get_gnn_dataset(cells, device='cpu'):
     """
-    根据解析后的cells数据构建GNN数据集
+    Converts cell data to a PyG graph dataset.
     Args:
-        cells (list): 包含每个cell的中心和连接关系的字典列表
+        cells (list): contains cell data
     Returns:
-        torch_geometric.data.Data: 包含节点特征和边信息的图数据
+        torch_geometric.data.Data: graph dataset
     """
     # 节点特征: 使用cell_center (x, y, z, radius)
     node_features = []
@@ -127,7 +121,7 @@ def get_gnn_dataset(cells, device='cpu'):
     node_features_tensor = torch.tensor(sorted_node_features_np, dtype=torch.float).to(device)
     edges_tensor = torch.tensor(sorted_edges_np, dtype=torch.long).t().contiguous().to(device)
 
-    # 创建图数据
+    # Graph data
     data = Data(x=node_features_tensor[:,3:], edge_index=edges_tensor)
     data.pos = node_features_tensor[:,0:3]
 
@@ -152,7 +146,7 @@ def load_target_data(filename, device='cpu'):
     target_data = torch.flatten(target_data)
     return target_data.to(device)
     
-# 多重 von Mises-Fisher 分布函数
+# Multi von Mises-Fisher Distribution
 def multi_vmf(weights, axes, kappas, w):
     # Ensure kappas are non-negative for stability
     kappas = torch.clamp(kappas, min=1e-10, max=1e5)
@@ -235,8 +229,6 @@ def plot_outputs_3d(references, predictions, sizes, save_path=None, return_fig=F
     else:
         plt.show()
 
-    
-
 def get_gridX(sizes, device):
     i_idx = torch.arange(sizes[0], dtype=torch.float, device=device) / sizes[0]
     j_idx = torch.arange(sizes[1], dtype=torch.float, device=device) / sizes[1]
@@ -250,7 +242,7 @@ def get_gridX(sizes, device):
     return X
 
 
-# 加载 ray 数据的函数
+# Load raw data: ray position and ray direction
 def load_rawdata(filename, sizes, device='cpu', verbose=False):
     X = get_gridX(sizes, device)
 
@@ -265,11 +257,11 @@ def load_rawdata(filename, sizes, device='cpu', verbose=False):
     z = r * np.sin(phi)
 
 
-    # 创建网格分布
+    # Create histogram edges
     x_edges = np.linspace(-1, 1, sizes[0]+1)  
     phi_edges = np.linspace(-np.pi, np.pi, sizes[1]+1)
 
-    # 统计 (X, φ) 分布
+    # Statistics of ray data
     H, _, _ = np.histogram2d(x, phi, bins=[x_edges, phi_edges])
     ray_data = torch.tensor(H, dtype=torch.float32, device=device).reshape(-1, 1)
     if ray_data.shape[0] != sizes[0] * sizes[1]:
@@ -283,7 +275,6 @@ def load_rawdata(filename, sizes, device='cpu', verbose=False):
     raw_num = min(4096, raw_X.shape[0])
     raw_X = raw_X[:raw_num, :]
 
-    # 将数据转换为张量
     raw_data = torch.tensor(raw_X, dtype=torch.float32, device=device)
     
     if verbose:

@@ -112,13 +112,14 @@ class ResidualAttentionBlock(nn.Module):
         ]))
         self.ln_2 = nn.LayerNorm(d_model)
 
-    def attention(self, x: torch.Tensor, key_padding_mask: torch.Tensor = None):
-        return self.attn(x, x, x, key_padding_mask=key_padding_mask)[0]
+    def attention(self, x: torch.Tensor, attn_mask: torch.Tensor = None, key_padding_mask: torch.Tensor = None):
+        return self.attn(x, x, x, attn_mask=attn_mask, key_padding_mask=key_padding_mask)[0]
 
-    def forward(self, x: torch.Tensor, key_padding_mask: torch.Tensor = None):
-        x = x + self.attention(self.ln_1(x), key_padding_mask=key_padding_mask)
+    def forward(self, x: torch.Tensor, attn_mask: torch.Tensor = None, key_padding_mask: torch.Tensor = None):
+        x = x + self.attention(self.ln_1(x), attn_mask=attn_mask, key_padding_mask=key_padding_mask)
         x = x + self.mlp(self.ln_2(x))
         return x
+
 
 # Transformer Module
 class Transformer(nn.Module):
@@ -130,10 +131,17 @@ class Transformer(nn.Module):
             ResidualAttentionBlock(width, heads) for _ in range(layers)
         ])
 
-    def forward(self, x: torch.Tensor, key_padding_mask: torch.Tensor = None):
+    def forward(self, x: torch.Tensor, attn_mask: torch.Tensor = None, key_padding_mask: torch.Tensor = None):
+        """
+        x: [sequence_length, batch_size, embedding_dim]
+        key_padding_mask: [batch_size, sequence_length]
+        """
+        seq_length = x.size(0)
+        device = x.device
         for block in self.resblocks:
-            x = block(x, key_padding_mask=key_padding_mask)
+            x = block(x, attn_mask=attn_mask, key_padding_mask=key_padding_mask)
         return x
+
 
 
 # GCNTransformer class, mimicking Vision Transformer structure
@@ -178,11 +186,9 @@ class GCNTransformer(nn.Module):
       # Decoder with Batch Normalization
         self.decoder = nn.Sequential(
             nn.Linear(transformer_width, hidden_dim),
-            nn.BatchNorm1d(hidden_dim),  # Add Batch Normalization here
-            nn.ReLU(),
+            nn.GELU(),
             nn.Linear(hidden_dim, hidden_dim),
-            nn.BatchNorm1d(hidden_dim),  # Add Batch Normalization here
-            nn.ReLU(),
+            nn.GELU(),
             nn.Linear(hidden_dim, output_dim)
         )
 
@@ -226,13 +232,22 @@ class GCNTransformer(nn.Module):
 
         # Add True for [CLS] tokens
         cls_mask = torch.ones(batch_size, 1, dtype=torch.bool, device=x.device)
-        attention_mask = torch.cat([cls_mask, mask], dim=1)  # [batch_size, 1 + max_num_nodes]
+        key_padding_mask = torch.cat([cls_mask, mask], dim=1)  # [batch_size, 1 + max_num_nodes]
 
         # Permute to match Transformer input shape (sequence_length, batch_size, embedding_dim)
         x_dense = x_dense.permute(1, 0, 2)  # [1 + max_num_nodes, batch_size, transformer_width]
 
+        # Initialize the attention mask with causal masking
+        attn_mask = torch.triu(torch.ones(seq_length, seq_length, device=device), diagonal=1).bool()
+
+        # Allow [CLS] token (first token) to attend to all tokens
+        attn_mask[0, :] = False  # [CLS] can attend to all tokens including itself
+
         # Forward pass through Transformer
-        x_transformed = self.transformer(x_dense, key_padding_mask=~attention_mask)  # [1 + max_num_nodes, batch_size, transformer_width]
+        x_transformed = self.transformer(x_dense, 
+                                        attn_mask= attn_mask,
+                                        key_padding_mask=~key_padding_mask)  
+                                        # [1 + max_num_nodes, batch_size, transformer_width]
 
         # Permute back to (batch_size, sequence_length, embedding_dim)
         x_transformed = x_transformed.permute(1, 0, 2)  # [batch_size, 1 + max_num_nodes, transformer_width]

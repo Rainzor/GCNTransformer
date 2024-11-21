@@ -123,7 +123,7 @@ class GraphSAGE(torch.nn.Module):
     def __init__(self, num_features, hidden_channels):
         super(GraphSAGE, self).__init__()
         # self.proj = nn.Linear(num_features, hidden_channels)
-        self.conv1 = SAGEConv(hidden_channels, hidden_channels)
+        self.conv1 = SAGEConv(num_features, hidden_channels)
         self.conv2 = SAGEConv(hidden_channels, hidden_channels)
         self.conv3 = SAGEConv(hidden_channels, hidden_channels)
         self.skip1 = nn.Linear(num_features, hidden_channels) if num_features != hidden_channels else nn.Identity()

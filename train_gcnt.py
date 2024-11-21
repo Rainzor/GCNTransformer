@@ -269,7 +269,7 @@ def main(args):
     if(args.model == ""):
         log_dir = os.path.join(args.base_path, 'tensorboard_logs', f'run_{timestamp}')
     else:
-        log_dir = os.path.join(args.base_path, 'tensorboard_logs', f'run_{args.model}_{timestamp}')
+        log_dir = os.path.join(args.base_path, 'tensorboard_logs', f'{args.model}_{timestamp}')
     writer = SummaryWriter(log_dir=log_dir)
 
     # Log losses to TensorBoard

@@ -168,14 +168,13 @@ def train_model(
                     val_count += 1
             average_val_loss = total_val_loss / val_count
 
-
+            loss_history['val'].append(average_val_loss)
+            loss_history['train'].append(average_train_loss)
             if scheduler:
                 scheduler.step()
 
             # Validation phase
             if is_main:
-                loss_history['val'].append(average_val_loss)
-                loss_history['train'].append(average_train_loss)
                 pbar.set_postfix({'Train Loss': f"{average_train_loss:.6f}", 'Val Loss': f"{average_val_loss:.6f}"})
                 pbar.update(1)
 

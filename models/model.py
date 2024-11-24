@@ -50,11 +50,18 @@ class PositionalEncoder(nn.Module):
         return sin_encodings.view(p.size(0), -1)  # Shape: (batch_size, dim * L)
 
 
+
+class GELU(nn.Module):
+    def __init__(self):
+        super(GELU, self).__init__()
+
+    def forward(self, x):
+        return 0.5 * x * (1 + F.tanh(np.sqrt(2 / np.pi) * (x + 0.044715 * torch.pow(x,3))))
+
 # GCN Module with Residual Connections
 class GCN(nn.Module):
     def __init__(self, num_features, hidden_channels):
         super(GCN, self).__init__()
-        torch.manual_seed(12345)
         # GCN Layers
         self.conv1 = GCNConv(num_features, hidden_channels)
         self.conv2 = GCNConv(hidden_channels, hidden_channels)
@@ -92,12 +99,85 @@ class GCN(nn.Module):
             self.skip1.reset_parameters()
 
 
-class GELU(nn.Module):
-    def __init__(self):
-        super(GELU, self).__init__()
 
-    def forward(self, x):
-        return 0.5 * x * (1 + F.tanh(np.sqrt(2 / np.pi) * (x + 0.044715 * torch.pow(x,3))))
+
+class GATBlock(nn.Module):
+    def __init__(self, d_in, d_out, heads=8, dropout=0.3, activation=F.elu):
+        super(GATBlock, self).__init__()
+        
+        assert d_out % heads == 0, "d_out must be divisible by heads"
+
+        self.d_out = d_out
+        self.num_heads = heads
+        self.head_dim = d_out//heads
+
+
+        # Multi-head GAT Layer
+        self.attention = GATConv(
+            d_in, 
+            self.head_dim, 
+            heads=self.num_heads, 
+            dropout=dropout,
+            residual=True
+        )
+        
+        # Layer Normalization
+        self.norm1 = nn.LayerNorm(d_out)
+        self.norm2 = nn.LayerNorm(d_out)
+
+        # Feedforward Layer
+        self.feedforward = nn.Sequential(
+            nn.Linear(d_out, d_out*4),
+            GELU(),
+            nn.Linear(d_out*4, d_out)
+        )       
+        # Dropout Layer
+        self.dropout = nn.Dropout(dropout)
+        
+    def forward(self, x, edge_index):
+        x = self.norm1(x)
+        x = self.attention(x,edge_index)
+        x = self.norm2(x)
+        x = x + self.dropout(self.feedforward(x))
+        return x
+
+class GNNEncoder(nn.Module):
+    def __init__(self, num_features, emb_dim, num_layers=3, heads=8, dropout=0.3):
+        super(GNNEncoder, self).__init__()
+        self.layers = nn.ModuleList()
+        
+        if num_features != emb_dim:
+            self.Linear = nn.Linear(num_features, emb_dim)
+
+        # 隐藏层
+        for _ in range(num_layers):
+            self.layers.append(GATBlock(
+                d_in=emb_dim,
+                d_out=emb_dim,
+                heads=heads,
+                dropout=dropout
+            ))
+        
+    def forward(self, x, edge_index):
+        if hasattr(self, 'Linear'):
+            x = self.Linear(x)
+            x = F.elu(x)
+
+        for layer in self.layers:
+            x = layer(x, edge_index)
+        return x
+    
+    def reset_parameters(self):
+        if hasattr(self, 'Linear'):
+            self.Linear.reset_parameters()
+        for layer in self.layers:
+            layer.attention.reset_parameters()
+            if isinstance(layer.feedforward, nn.Sequential):
+                for module in layer.feedforward:
+                    if isinstance(module, nn.Linear):
+                        module.reset_parameters()
+            layer.norm1.reset_parameters()
+            layer.norm2.reset_parameters()
     
 # Residual Attention Block
 class ResidualAttentionBlock(nn.Module):
@@ -166,7 +246,7 @@ class GCNTransformer(nn.Module):
         self.positional_encoder = PositionalEncoder(L=embedding_dim)
 
         # GCN module
-        self.gcn = GCN(num_features + embedding_dim*pos_dim, embedding_dim)
+        self.gcn = GNNEncoder(num_features + embedding_dim*pos_dim, embedding_dim)
 
         # [CLS] token as a learnable embedding
         self.cls_token = nn.Parameter(torch.zeros(1, 1, transformer_width))

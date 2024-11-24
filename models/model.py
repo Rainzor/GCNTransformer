@@ -283,68 +283,7 @@ class GCNTransformer(nn.Module):
             nn.init.zeros_(self.gcn_to_transformer.bias)
         # Positional Encoder weightare fixed (sinusoidal), no initialization needed
     
-    # CLS Version
-    def forward(self, x, edge_index, p, batch=None):
-        """
-        x: [total_num_nodes, num_features]
-        edge_index: [2, num_edges]
-        p: [total_num_nodes, pos_dim], positional features for each node in the range [-1, 1]
-        batch: [total_num_nodes], indicating the graph index each node belongs to
-        """
-        if batch is None:
-            batch = torch.zeros(x.size(0), dtype=torch.long, device=x.device)
-
-        pos_enc = self.positional_encoder(p)  # [total_num_nodes, embedding_dim * pos_dim]
-
-        x = torch.cat([x, pos_enc], dim=-1)  # [total_num_nodes, num_features + embedding_dim * pos_dim]
-        # Extract node features using GCN
-        x = self.gcn(x, edge_index)  # [total_num_nodes, embedding_dim]
-
-        x = torch.cat([x, pos_enc], dim=-1) # [total_num_nodes, embedding_dim*(pos_dim+1)]
-
-        # Map to Transformer input dimension
-        x = self.gcn_to_transformer(x)  # [total_num_nodes, transformer_width]
-
-        x_dense, mask = to_dense_batch(x, batch)  # x_dense: [batch_size, max_num_nodes, transformer_width]; mask: [batch_size, max_num_nodes]
-
-        batch_size, max_num_nodes, _ = x_dense.size()
-        cls_tokens = self.cls_token.expand(batch_size, -1, -1)  # [batch_size, 1, transformer_width]
-        x_dense = torch.cat([cls_tokens, x_dense], dim=1)  # [batch_size, 1 + max_num_nodes, transformer_width]
-
-        # Add True for [CLS] tokens
-        cls_mask = torch.ones(batch_size, 1, dtype=torch.bool, device=x.device)
-        key_padding_mask = torch.cat([cls_mask, mask], dim=1)  # [batch_size, 1 + max_num_nodes]
-
-        # Permute to match Transformer input shape (sequence_length, batch_size, embedding_dim)
-        x_dense = x_dense.permute(1, 0, 2)  # [1 + max_num_nodes, batch_size, transformer_width]
-
-        # Initialize the attention mask with causal masking
-        attn_mask = torch.triu(torch.ones(max_num_nodes+1, max_num_nodes+1, device=x.device), diagonal=1).bool()
-
-        # Allow [CLS] token (first token) to attend to all tokens
-        attn_mask[0, :] = False  # [CLS] can attend to all tokens including itself
-        # attn_mask[1:, 0] = True  # The other tokens cannot attend to [CLS]
-
-        # attn_mask = None
-
-        # Forward pass through Transformer
-        x_transformed = self.transformer(x_dense, 
-                                        attn_mask= attn_mask,
-                                        key_padding_mask=~key_padding_mask)  
-                                        # [1 + max_num_nodes, batch_size, transformer_width]
-
-        # Permute back to (batch_size, sequence_length, embedding_dim)
-        x_transformed = x_transformed.permute(1, 0, 2)  # [batch_size, 1 + max_num_nodes, transformer_width]
-
-        # Extract the [CLS] token's features
-        cls_features = self.ln_post(x_transformed[:, 0, :])  # [batch_size, transformer_width]
-
-        # Pass through the decoder
-        out = self.decoder(cls_features)  # [batch_size, output_dim]
-
-        return out  # [batch_size, output_dim]
-
-    # No CLS Version
+    # # CLS Version
     # def forward(self, x, edge_index, p, batch=None):
     #     """
     #     x: [total_num_nodes, num_features]
@@ -369,14 +308,24 @@ class GCNTransformer(nn.Module):
     #     x_dense, mask = to_dense_batch(x, batch)  # x_dense: [batch_size, max_num_nodes, transformer_width]; mask: [batch_size, max_num_nodes]
 
     #     batch_size, max_num_nodes, _ = x_dense.size()
+    #     cls_tokens = self.cls_token.expand(batch_size, -1, -1)  # [batch_size, 1, transformer_width]
+    #     x_dense = torch.cat([cls_tokens, x_dense], dim=1)  # [batch_size, 1 + max_num_nodes, transformer_width]
 
-    #     key_padding_mask = mask  # [batch_size, max_num_nodes]
+    #     # Add True for [CLS] tokens
+    #     cls_mask = torch.ones(batch_size, 1, dtype=torch.bool, device=x.device)
+    #     key_padding_mask = torch.cat([cls_mask, mask], dim=1)  # [batch_size, 1 + max_num_nodes]
 
     #     # Permute to match Transformer input shape (sequence_length, batch_size, embedding_dim)
-    #     x_dense = x_dense.permute(1, 0, 2)  # [max_num_nodes, batch_size, transformer_width]
+    #     x_dense = x_dense.permute(1, 0, 2)  # [1 + max_num_nodes, batch_size, transformer_width]
 
     #     # Initialize the attention mask with causal masking
-    #     attn_mask = torch.triu(torch.ones(max_num_nodes, max_num_nodes, device=x.device), diagonal=1).bool()
+    #     attn_mask = torch.triu(torch.ones(max_num_nodes+1, max_num_nodes+1, device=x.device), diagonal=1).bool()
+
+    #     # Allow [CLS] token (first token) to attend to all tokens
+    #     attn_mask[0, :] = False  # [CLS] can attend to all tokens including itself
+    #     # attn_mask[1:, 0] = True  # The other tokens cannot attend to [CLS]
+
+    #     # attn_mask = None
 
     #     # Forward pass through Transformer
     #     x_transformed = self.transformer(x_dense, 
@@ -385,18 +334,69 @@ class GCNTransformer(nn.Module):
     #                                     # [1 + max_num_nodes, batch_size, transformer_width]
 
     #     # Permute back to (batch_size, sequence_length, embedding_dim)
-    #     x_transformed = x_transformed.permute(1, 0, 2)  # [batch_size, max_num_nodes, transformer_width]
+    #     x_transformed = x_transformed.permute(1, 0, 2)  # [batch_size, 1 + max_num_nodes, transformer_width]
 
-    #     # graph_features = torch.mean(x_transformed, dim=1)  # [batch_size, transformer_width]
-    #     graph_features = x_transformed[:, -1, :]  # [batch_size, transformer_width]
-
-    #     # Extract the graph's features
-    #     cls_features = self.ln_post(graph_features)  # [batch_size, transformer_width]
+    #     # Extract the [CLS] token's features
+    #     cls_features = self.ln_post(x_transformed[:, 0, :])  # [batch_size, transformer_width]
 
     #     # Pass through the decoder
     #     out = self.decoder(cls_features)  # [batch_size, output_dim]
 
     #     return out  # [batch_size, output_dim]
+
+    # No CLS Version
+    def forward(self, x, edge_index, p, batch=None):
+        """
+        x: [total_num_nodes, num_features]
+        edge_index: [2, num_edges]
+        p: [total_num_nodes, pos_dim], positional features for each node in the range [-1, 1]
+        batch: [total_num_nodes], indicating the graph index each node belongs to
+        """
+        if batch is None:
+            batch = torch.zeros(x.size(0), dtype=torch.long, device=x.device)
+
+        pos_enc = self.positional_encoder(p)  # [total_num_nodes, embedding_dim * pos_dim]
+
+        x = torch.cat([x, pos_enc], dim=-1)  # [total_num_nodes, num_features + embedding_dim * pos_dim]
+        # Extract node features using GCN
+        x = self.gcn(x, edge_index)  # [total_num_nodes, embedding_dim]
+
+        x = torch.cat([x, pos_enc], dim=-1) # [total_num_nodes, embedding_dim*(pos_dim+1)]
+
+        # Map to Transformer input dimension
+        x = self.gcn_to_transformer(x)  # [total_num_nodes, transformer_width]
+
+        x_dense, mask = to_dense_batch(x, batch)  # x_dense: [batch_size, max_num_nodes, transformer_width]; mask: [batch_size, max_num_nodes]
+
+        batch_size, max_num_nodes, _ = x_dense.size()
+
+        key_padding_mask = mask  # [batch_size, max_num_nodes]
+
+        # Permute to match Transformer input shape (sequence_length, batch_size, embedding_dim)
+        x_dense = x_dense.permute(1, 0, 2)  # [max_num_nodes, batch_size, transformer_width]
+
+        # Initialize the attention mask with causal masking
+        attn_mask = torch.triu(torch.ones(max_num_nodes, max_num_nodes, device=x.device), diagonal=1).bool()
+
+        # Forward pass through Transformer
+        x_transformed = self.transformer(x_dense, 
+                                        attn_mask= attn_mask,
+                                        key_padding_mask=~key_padding_mask)  
+                                        # [1 + max_num_nodes, batch_size, transformer_width]
+
+        # Permute back to (batch_size, sequence_length, embedding_dim)
+        x_transformed = x_transformed.permute(1, 0, 2)  # [batch_size, max_num_nodes, transformer_width]
+
+        graph_features = torch.mean(x_transformed, dim=1)  # [batch_size, transformer_width]
+        # graph_features = x_transformed[:, -1, :]  # [batch_size, transformer_width]
+
+        # Extract the graph's features
+        cls_features = self.ln_post(graph_features)  # [batch_size, transformer_width]
+
+        # Pass through the decoder
+        out = self.decoder(cls_features)  # [batch_size, output_dim]
+
+        return out  # [batch_size, output_dim]
 
     def vmf_param(self, x, edge_index, p, batch=None):
         """

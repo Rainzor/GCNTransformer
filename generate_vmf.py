@@ -16,7 +16,7 @@ import sys
 import time
 import argparse
 import math
-
+import json
 
 # Set the device if available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -198,7 +198,7 @@ def plot_outputs_3d(references, predictions, sizes, save_path=None):
 def get_gridX(sizes):
     i_idx = torch.arange(sizes[0], dtype=torch.float, device=device) / sizes[0]
     j_idx = torch.arange(sizes[1], dtype=torch.float, device=device) / sizes[1]
-    i_grid, j_grid = torch.meshgrid(i_idx, j_idx)
+    i_grid, j_grid = torch.meshgrid(i_idx, j_idx, indexing='ij')
     pos_x = i_grid * 2 - 1
     pos_phi = (j_grid * 2 - 1) * np.pi
     pos_r = torch.sqrt(1 - pos_x**2)
@@ -208,10 +208,16 @@ def get_gridX(sizes):
     return X   
 
 # 加载 ray 数据的函数
-def load_rawdata(filename, sizes, device, verbose=False):
-    X = get_gridX(sizes)
-
-    rawdata = np.fromfile(filename, dtype=np.float32)
+def load_rawdata(filename, sizes, device, verbose=False, dtype=np.float32):
+    X = get_gridX(sizes)    
+    # 加载数据
+    rawdata = np.fromfile(filename, dtype=dtype)
+    
+    # 如果是 float16，转换为 float32
+    if dtype == np.float16:
+        if verbose:
+            print(f"Converting data from float16 to float32")
+        rawdata = rawdata.astype(np.float32)
     rawdata = rawdata.reshape(-1, 4)
     # print(rawdata.shape)
     x = rawdata[:,0]
@@ -295,10 +301,9 @@ def train_model(model_id, vmf, optimizer, dataset, hyperparams, device, save_pat
             update_model()
 
     # 保存模型参数
-    if save_path is not None:
-        model_save_path = os.path.join(save_path, f"vmf_parameters.pth")
-        torch.save(vmf.state_dict(), model_save_path)
-        print(f"Model {model_id} parameters saved to {model_save_path}")
+    if save_path is not None: 
+        torch.save(vmf.state_dict(), save_path)
+        print(f"Model {model_id} parameters saved to {save_path}")
 
 # 加载模型参数
 def load_model(model_path, num_components, device):
@@ -313,21 +318,94 @@ def load_model(model_path, num_components, device):
     
     return model
 
-def generate_filenames(base_path, num_files):
-    """Generate a list of file paths."""
-    return [os.path.join(base_path, f"{i}/rawdataNonSpe.bin") for i in range(0, num_files)]
+def generate_filenames(base_path="", default_path="", num_files=0, is_specular=False):
+    """
+    Generate the file paths for the raw data and the save paths for the trained models.
+
+    :param base_path: The base path for the data files.
+    :param num_files: The number of data files.
+    :return: (data_paths, save_paths) 
+    """
+
+    data_paths = []
+    save_paths = []
+
+    def getpath(subdir):
+        if default_path=="":
+            return
+        if not os.path.isdir(subdir):
+            print(f"Error: The directory '{subdir}' does not exist.")
+            sys.exit(1)
+
+        output_json_path = os.path.join(subdir, "output.json")
+        if os.path.isfile(output_json_path):
+            try:
+                with open(output_json_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    for entry in data:
+                        # 获取 rawNonSpe 文件路径
+                        raw_non_spe = entry.get("rawNonSpe", "")
+                        raw_spe = entry.get("raw", "")
+                        if is_specular and raw_spe:
+                            raw_spe_path = os.path.join(subdir, raw_spe)
+                            data_paths.append(raw_spe_path)
+                        elif raw_non_spe:
+                            raw_non_spe_path = os.path.join(subdir, raw_non_spe)
+                            data_paths.append(raw_non_spe_path)
+                        else:
+                            print(f"Waring: 'rawNonSpe' field missing in entry: {entry}")
+                            data_paths.append("")
+                        # 获取 vmf 文件路径
+                        vmf = entry.get("vmf", "")
+                        if vmf:
+                            vmf_path = os.path.join(subdir, vmf)
+                            save_paths.append(vmf_path)
+                        else:
+                            print(f"Waring: 'vmf' field missing in entry: {entry}")
+                            save_paths.append("")
+            except json.JSONDecodeError as e:
+                print(f"Error decoding JSON in file {output_json_path}: {e}")
+                raw_non_spe_path = os.path.join(subdir, "rawdataNonSpe.bin")
+                raw_spe_path = os.path.join(subdir, "rawdata.bin")
+                vmf_path = os.path.join(subdir, "vmf_parameters.pth")
+                if is_specular:
+                    data_paths.append(raw_spe_path)
+                else:
+                    data_paths.append(raw_non_spe_path)
+                save_paths.append(vmf_path)
+        else:
+            print(f"{output_json_path} not found, using default paths.")
+            raw_non_spe_path = os.path.join(subdir, "rawdataNonSpe.bin")
+            raw_spe_path = os.path.join(subdir, "rawdata.bin")
+            vmf_path = os.path.join(subdir, "vmf_parameters.pth")
+            if is_specular:
+                data_paths.append(raw_spe_path)
+            else:
+                data_paths.append(raw_non_spe_path)
+            save_paths.append(vmf_path)
+
+
+    for i in range(num_files):
+        subdir = os.path.join(base_path, str(i))
+        getpath(subdir)
+
+    getpath(default_path)
+
+    return data_paths, save_paths
 
 def main():
     # Set up command-line argument parsing
     parser = argparse.ArgumentParser(description='Script to train vMF mixture models.')
-    parser.add_argument('--base_path', type=str, default='datasets/raw_data/foam0',
+    parser.add_argument('--base_path', type=str, default='',
                         help='Base path for data files. Example: datasets/')
     parser.add_argument('--num_files', type=int, default=1,
                         help='Number of data files. Default is 1.')
+    parser.add_argument('--data_path', type=str, default='',
+                        help='Path to the data file. Example: datasets/raw_data/foam0/0')
     parser.add_argument('--num_components', type=int, default=64,
                         help='Number of components in the vMF mixture model. Default is 64.')
-    parser.add_argument('--num_epochs', type=int, default=10000,
-                        help='Number of training epochs. Default is 10000.')
+    parser.add_argument('--num_epochs', type=int, default=15000,
+                        help='Number of training epochs. Default is 15000.')
     parser.add_argument('--kl_lambda', type=float, default=1.0,
                         help='Weight for KL divergence. Default is 1.')
     parser.add_argument('--l1_lambda', type=float, default=10.0,
@@ -340,6 +418,10 @@ def main():
                         help='Weight decay (for Adam optimizer). Default is 1e-5.')
     parser.add_argument('--sizes', type=str, default='64,64',
                         help='Sizes as a comma-separated list of integers. Example: "64,64"')
+    parser.add_argument("--dtype", type=int, default="32",
+                        help="Data type of raw data")
+    parser.add_argument("--specular", type=bool, default=False,
+                        help="Whether to use specular data")
     # 默认设备设为所有可用GPU，如果没有GPU则为CPU
     if torch.cuda.is_available():
         default_device = 'cuda'
@@ -349,10 +431,16 @@ def main():
                         help='Computation device. Defaults to CUDA if available, otherwise CPU.')
 
     args = parser.parse_args()
-
-    print(f"Training vMF mixture models with the datasets in {args.base_path}") 
+    if args.data_path=="" and args.base_path=="":
+        print("Error: Either --data_path or --base_path must be specified.")
+        sys.exit(1)
+    elif args.data_path=="":
+        print(f"Training vMF mixture models with the datasets in {args.base_path}")
+    else:
+        print(f"Training vMF mixture models with the dataset in {args.data_path}")
     # 初始化参数
     base_path = args.base_path
+    data_path = args.data_path
     num_files = args.num_files
     num_components = args.num_components
     num_epochs = args.num_epochs
@@ -361,8 +449,9 @@ def main():
     l2_lambda = args.l2_lambda
     learning_rate = args.learning_rate
     weight_decay = args.weight_decay
-    # 移除全局device，改为每个模型单独分配
-    # device = args.device
+    device = args.device
+    dtype = np.float32 if args.dtype==32 else np.float16
+    is_specular = args.specular
 
     sizes = [int(s) for s in args.sizes.split(',')]
 
@@ -373,12 +462,20 @@ def main():
         "num_epochs": num_epochs
     }
 
-    if not os.path.isdir(base_path):
-        print(f"Error: The base path '{base_path}' does not exist.")
-        sys.exit(1)
 
-    filenames = generate_filenames(base_path, num_files)
-    num_models = len(filenames)
+    
+    
+    if data_path=="":
+        if not os.path.isdir(base_path):
+            print(f"Error: The base path '{base_path}' does not exist.")
+            sys.exit(1)
+        rawdata_paths, save_paths = generate_filenames(base_path=base_path, num_files=num_files, is_specular=is_specular)
+    else:
+        if not os.path.isdir(data_path):
+            print(f"Error: The data path '{data_path}' does not exist.")
+            sys.exit(1)
+        rawdata_paths, save_paths = generate_filenames(default_path=data_path, is_specular=is_specular)
+    num_models = len(rawdata_paths)
 
     # 获取可用的GPU数量
     num_gpus = torch.cuda.device_count()
@@ -405,7 +502,7 @@ def main():
         optimizers.append(optimizer)
 
         # 加载对应的数据集
-        raw_data, ray_data, X = load_rawdata(filenames[i], sizes, device, verbose=False)
+        raw_data, ray_data, X = load_rawdata(rawdata_paths[i], sizes, device, verbose=False, dtype=dtype)
         dataset = {
             "samples": raw_data.clone().detach(),
             "target": ray_data.reshape(-1).to(device),
@@ -413,8 +510,6 @@ def main():
         }
         datasets.append(dataset)
 
-    # 确定保存路径（基于每个数据文件夹）
-    save_paths = [os.path.dirname(f) for f in filenames]
     start_time = time.time()
     # 启动线程进行并行训练
     threads = []

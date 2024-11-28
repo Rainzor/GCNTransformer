@@ -209,7 +209,7 @@ def main(args):
         'embedding_dim': 64,
         'pos_dim': datasets[0].pos.size(1),
         'dropout': 0.1,
-        'hidden_dim': 128,
+        'hidden_dim': 512,
         'output_dim': 256,
         'num_epochs': args.num_epochs,
         'lr': args.learning_rate,

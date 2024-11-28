@@ -10,7 +10,7 @@ import math
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.data import Data
-
+import json
 
 def parse_cell_txt(file_path):
     cells = []
@@ -86,7 +86,7 @@ def sort_nodes_and_edges(node_features_np: np.ndarray, edges_np: np.ndarray):
 
     return sorted_node_features_np, sorted_edges
 
-def get_gnn_dataset(cells, device='cpu'):
+def get_gnn_dataset(cells,json_path=None, device='cpu'):
     """
     Converts cell data to a PyG graph dataset.
     Args:
@@ -116,6 +116,10 @@ def get_gnn_dataset(cells, device='cpu'):
 
     # 对节点和边进行排序
     sorted_node_features_np, sorted_edges_np = sort_nodes_and_edges(node_features_np, edges_np)
+
+    if json_path is not None:
+        with open(json_path, 'r') as f:
+            json.dump({"node_features": sorted_node_features_np.tolist(), "edges": sorted_edges_np.tolist()}, f)
 
     # 转换为torch.Tensor
     node_features_tensor = torch.tensor(sorted_node_features_np, dtype=torch.float).to(device)

@@ -7,9 +7,6 @@ from torch_geometric.loader import DataLoader
 from torch_geometric.utils import to_dense_batch
 
 import math
-
-from collections import OrderedDict
-
 import numpy as np
 
 
@@ -149,7 +146,7 @@ class GNNEncoder(nn.Module):
         if num_features != emb_dim:
             self.Linear = nn.Linear(num_features, emb_dim)
 
-        # 隐藏层
+        # Hidden Layers
         for _ in range(num_layers):
             self.layers.append(GATBlock(
                 d_in=emb_dim,
@@ -199,46 +196,6 @@ class MLP(nn.Module):
     def reset_parameters(self):
         for layer in self.layers:
             layer.reset_parameters()
-
-# Residual Attention Block
-class ResidualAttentionBlock(nn.Module):
-    def __init__(self, d_model: int, n_head: int):
-        super(ResidualAttentionBlock, self).__init__()
-        self.attn = nn.MultiheadAttention(d_model, n_head)
-        self.ln_1 = nn.LayerNorm(d_model)
-        self.mlp = MLP(d_model, 4*d_model, d_model, num_layers=2, activation=GELU())
-        self.ln_2 = nn.LayerNorm(d_model)
-
-    def attention(self, x: torch.Tensor, attn_mask: torch.Tensor = None, key_padding_mask: torch.Tensor = None):
-        return self.attn(x, x, x, attn_mask=attn_mask, key_padding_mask=key_padding_mask)[0]
-
-    def forward(self, x: torch.Tensor, attn_mask: torch.Tensor = None, key_padding_mask: torch.Tensor = None):
-        x = x + self.attention(self.ln_1(x), attn_mask=attn_mask, key_padding_mask=key_padding_mask)
-        x = x + self.mlp(self.ln_2(x))
-        return x
-
-
-# Transformer Module
-class Transformer(nn.Module):
-    def __init__(self, width: int, layers: int, heads: int):
-        super(Transformer, self).__init__()
-        self.width = width
-        self.layers = layers
-        self.resblocks = nn.ModuleList([
-            ResidualAttentionBlock(width, heads) for _ in range(layers)
-        ])
-
-    def forward(self, x: torch.Tensor, attn_mask: torch.Tensor = None, key_padding_mask: torch.Tensor = None):
-        """
-        x: [sequence_length, batch_size, embedding_dim]
-        key_padding_mask: [batch_size, sequence_length]
-        """
-        seq_length = x.size(0)
-        device = x.device
-        for block in self.resblocks:
-            x = block(x, attn_mask=attn_mask, key_padding_mask=key_padding_mask)
-        return x
-
 
 class TransformerLayer(nn.Module):
     def __init__(self,
@@ -347,11 +304,6 @@ class GraphTransformer(nn.Module):
                             dim_feedforward=transformer_width*2
                             # dropout=dropout
                         )
-        # self.transformer = Transformer(
-        #     width=transformer_width,
-        #     layers=transformer_layers,
-        #     heads=transformer_heads
-        # )
 
       # Decoder with Batch Normalization
         self.decoder = MLP(transformer_width, hidden_dim, output_dim, num_layers=3, activation=GELU())
@@ -386,14 +338,14 @@ class GraphTransformer(nn.Module):
         x = x + self.subgraph_pos_enc(pos_enc)  # [total_num_nodes, transformer_width]
 
         # Extract the graph's features
-        graph_features = self._read_out(x, batch, pool=self.pool)  # [batch_size, transformer_width]
+        graph_features = self._readout(x, batch, pool=self.pool)  # [batch_size, transformer_width]
 
         # Pass through the decoder
         out = self.decoder(graph_features)  # [batch_size, output_dim]
 
         return out  # [batch_size, output_dim]
 
-    def _read_out(self, x, batch, pool='cls'):
+    def _readout(self, x, batch, pool='cls'):
         # x_dense: [batch_size, max_num_nodes, transformer_width]; 
         # mask: [batch_size, max_num_nodes]
         x_dense, mask = to_dense_batch(x, batch)  
@@ -414,8 +366,7 @@ class GraphTransformer(nn.Module):
         # Initialize the attention mask with causal masking
         if pool == 'cls':
             attn_mask = torch.triu(torch.ones(max_num_nodes+1, max_num_nodes+1, device=x.device), diagonal=1).bool() 
-            # Allow [CLS] token (first token) to attend to all tokens
-            attn_mask[0, :] = False  # [CLS] can attend to all tokens including 
+            attn_mask[0, :] = False  # [CLS] can attend to all tokens including itself
         elif pool == 'mean':
             attn_mask = torch.triu(torch.ones(max_num_nodes, max_num_nodes, device=x.device), diagonal=1).bool()
 
@@ -444,13 +395,13 @@ class GraphTransformer(nn.Module):
         """
         Computes the von Mises-Fisher (vMF) parameters from the model output.
         
-        参数：
+        Parameters:
         - x (torch.Tensor): Feature tensor，Shape [total_num_nodes, num_features]
         - edge_index (torch.Tensor): Edge index tensor，Shape [2, num_edges]
         - p (torch.Tensor): Positional features tensor，Shape [total_num_nodes, pos_dim]
         - batch (torch.Tensor): Batch tensor，Shape [total_num_nodes]
         
-        返回：
+        Returns:
         - weights (torch.Tensor): [batch_size, num_vmf]
         - mus (torch.Tensor): [batch_size, num_vmf, 3]
         - kappas (torch.Tensor): [batch_size, num_vmf]

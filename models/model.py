@@ -238,6 +238,70 @@ class Transformer(nn.Module):
         return x
 
 
+class TransformerLayer(nn.Module):
+    def __init__(self,
+                d_model,
+                n_head,
+                dim_feedforward=2048,
+                dropout=0.1,
+                activation=F.relu):
+        super(TransformerLayer, self).__init__()
+        self.self_attn = nn.MultiheadAttention(d_model, n_head)
+
+        self.feedforward = MLP(d_model, dim_feedforward, d_model, num_layers=2, activation=activation)
+
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
+    
+    def _sa_block(self, x, attn_mask, key_padding_mask):
+        x = self.self_attn(x, x, x, attn_mask=attn_mask, key_padding_mask=key_padding_mask)[0]
+
+        return self.dropout1(x)
+
+    def _ff_block(self, x):
+        return self.dropout2(self.feedforward(x))
+
+    def forward(self, x, attn_mask=None, key_padding_mask=None):
+        x = x + self._sa_block(self.norm1(x), attn_mask, key_padding_mask)
+        x = x + self._ff_block(self.norm2(x))
+        return x
+    
+    def reset_parameters(self):
+        self.self_attn.reset_parameters()
+        self.feedforward.reset_parameters()
+        self.norm1.reset_parameters()
+        self.norm2.reset_parameters()
+
+class TransformerEncoder(nn.Module):
+    def __init__(self,
+                d_model,
+                n_head,
+                num_layers,
+                dim_feedforward=2048,
+                dropout=0.1):
+        super(TransformerEncoder, self).__init__()
+        self.layers = nn.ModuleList([
+            TransformerLayer(d_model, n_head, dim_feedforward, dropout, GELU())
+            for _ in range(num_layers)
+        ])
+    
+    def forward(self, x, attn_mask=None, key_padding_mask=None):
+        """
+        x: [sequence_length, batch_size, embedding_dim]
+        attn_mask: [sequence_length, sequence_length]
+        key_padding_mask: [batch_size, sequence_length]
+        """
+        for layer in self.layers:
+            x = layer(x, attn_mask, key_padding_mask)
+        return x
+    
+    def reset_parameters(self):
+        for layer in self.layers:
+            layer.reset_parameters()
+
 
 # GraphTransformer class, mimicking Vision Transformer structure
 class GraphTransformer(nn.Module):
@@ -264,13 +328,13 @@ class GraphTransformer(nn.Module):
         self.positional_encoder = PositionalEncoder(L=embedding_dim)
 
         # GCN module
-        self.gnn = GNNEncoder(num_features + embedding_dim*pos_dim, transformer_width)
+        self.gnn = GNNEncoder(num_features + embedding_dim*pos_dim, embedding_dim)
 
         # [CLS] token as a learnable embedding
         self.cls_token = nn.Parameter(torch.zeros(1, 1, transformer_width))
 
         # Mapping GCN output to Transformer input dimension
-        # self.gcn_to_transformer = nn.Linear(embedding_dim*(pos_dim+1), transformer_width)
+        self.gcn_to_transformer = nn.Linear(embedding_dim*(pos_dim+1), transformer_width)
 
         # Layer normalization before Transformer
         self.ln_pre = nn.LayerNorm(transformer_width)
@@ -289,10 +353,7 @@ class GraphTransformer(nn.Module):
 
     def _init_weights(self):
         nn.init.trunc_normal_(self.cls_token, std=0.02)
-        # # Initialize GCN to Transformer mapping
-        # nn.init.trunc_normal_(self.gcn_to_transformer.weight, std=0.02)
-        # if self.gcn_to_transformer.bias is not None:
-        #     nn.init.zeros_(self.gcn_to_transformer.bias)
+
         # Positional Encoder weightare fixed (sinusoidal), no initialization needed
     
     def forward(self, x, edge_index, p, batch=None):
@@ -309,12 +370,12 @@ class GraphTransformer(nn.Module):
 
         x = torch.cat([x, pos_enc], dim=-1)  # [total_num_nodes, num_features + embedding_dim * pos_dim]
         # Extract node features using GCN
-        x = self.gnn(x, edge_index)  # [total_num_nodes, transformer_width]
+        x = self.gnn(x, edge_index)  # [total_num_nodes, gnn_width]
 
-        # x = torch.cat([x, pos_enc], dim=-1) # [total_num_nodes, embedding_dim*(pos_dim+1)]
+        x = torch.cat([x, pos_enc], dim=-1) # [total_num_nodes, embedding_dim*(pos_dim+1)]
 
         # Map to Transformer input dimension
-        # x = self.gcn_to_transformer(x)  # [total_num_nodes, transformer_width]
+        x = self.gcn_to_transformer(x)  # [total_num_nodes, transformer_width]
 
         # Extract the graph's features
         graph_features = self._read_out(x, batch, pool=self.pool)  # [batch_size, transformer_width]

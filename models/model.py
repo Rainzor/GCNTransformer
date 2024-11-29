@@ -245,7 +245,7 @@ class TransformerLayer(nn.Module):
                 d_model,
                 n_head,
                 dim_feedforward=2048,
-                dropout=0.1,
+                dropout=0.0,
                 activation=F.relu):
         super(TransformerLayer, self).__init__()
         self.self_attn = nn.MultiheadAttention(d_model, n_head)
@@ -260,7 +260,6 @@ class TransformerLayer(nn.Module):
     
     def _sa_block(self, x, attn_mask, key_padding_mask):
         x = self.self_attn(x, x, x, attn_mask=attn_mask, key_padding_mask=key_padding_mask)[0]
-
         return self.dropout1(x)
 
     def _ff_block(self, x):
@@ -283,7 +282,7 @@ class TransformerEncoder(nn.Module):
                 n_head,
                 num_layers,
                 dim_feedforward=2048,
-                dropout=0.1):
+                dropout=0.0):
         super(TransformerEncoder, self).__init__()
         self.layers = nn.ModuleList([
             TransformerLayer(d_model, n_head, dim_feedforward, dropout, GELU())
@@ -341,18 +340,18 @@ class GraphTransformer(nn.Module):
         self.cls_token = nn.Parameter(torch.zeros(1, 1, transformer_width))
 
         # If positional encoding increases the dimension, adjust the transformer width accordingly
-        # self.transformer = TransformerEncoder(
-        #                     d_model=transformer_width,
-        #                     n_head=transformer_heads,
-        #                     num_layers=transformer_layers,
-        #                     dim_feedforward=transformer_width*2,
-        #                     dropout=dropout
-        #                 )
-        self.transformer = Transformer(
-            width=transformer_width,
-            layers=transformer_layers,
-            heads=transformer_heads
-        )
+        self.transformer = TransformerEncoder(
+                            d_model=transformer_width,
+                            n_head=transformer_heads,
+                            num_layers=transformer_layers,
+                            dim_feedforward=transformer_width*2
+                            # dropout=dropout
+                        )
+        # self.transformer = Transformer(
+        #     width=transformer_width,
+        #     layers=transformer_layers,
+        #     heads=transformer_heads
+        # )
 
       # Decoder with Batch Normalization
         self.decoder = MLP(transformer_width, hidden_dim, output_dim, num_layers=3, activation=GELU())
@@ -403,22 +402,22 @@ class GraphTransformer(nn.Module):
         # Add [CLS] token
         cls_tokens = self.cls_token.expand(batch_size, -1, -1)  # [batch_size, 1, transformer_width]
 
-        x_dense = torch.cat([cls_tokens, x_dense], dim=1)  # [batch_size, 1 + max_num_nodes, transformer_width]
+        x_dense = torch.cat([cls_tokens, x_dense], dim=1) if pool == 'cls' else x_dense
 
         # Add True for [CLS] tokens
         cls_mask = torch.ones(batch_size, 1, dtype=torch.bool, device=x.device)
-        key_padding_mask = torch.cat([cls_mask, mask], dim=1)  # [batch_size, 1 + max_num_nodes]
+        key_padding_mask = torch.cat([cls_mask, mask], dim=1) if pool == 'cls' else mask
 
         # Permute to match Transformer input shape (sequence_length, batch_size, embedding_dim)
         x_dense = x_dense.permute(1, 0, 2)  # [1 + max_num_nodes, batch_size, transformer_width]
 
         # Initialize the attention mask with causal masking
-        attn_mask = torch.triu(torch.ones(max_num_nodes+1, max_num_nodes+1, device=x.device), diagonal=1).bool()
-
-        # Allow [CLS] token (first token) to attend to all tokens
-        attn_mask[0, :] = False  # [CLS] can attend to all tokens including itself
-
-        # attn_mask = None
+        if pool == 'cls':
+            attn_mask = torch.triu(torch.ones(max_num_nodes+1, max_num_nodes+1, device=x.device), diagonal=1).bool() 
+            # Allow [CLS] token (first token) to attend to all tokens
+            attn_mask[0, :] = False  # [CLS] can attend to all tokens including 
+        elif pool == 'mean':
+            attn_mask = torch.triu(torch.ones(max_num_nodes, max_num_nodes, device=x.device), diagonal=1).bool()
 
         # Forward pass through Transformer
         x_transformed = self.transformer(x_dense, 
@@ -437,8 +436,7 @@ class GraphTransformer(nn.Module):
             sum_x = (x_dense * mask_unsqueeze).sum(dim=1)  # [batch_size, transformer_width]
             num_nodes = mask_unsqueeze.sum(dim=1)
             cls_features = sum_x / num_nodes.clamp(min=1)
-        else:
-            raise ValueError('Invalid pooling type. Must be either "cls" or "mean".')
+
 
         return cls_features  # [batch_size, transformer_width]
 

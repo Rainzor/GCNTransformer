@@ -141,7 +141,7 @@ def evaluate(model, iterator, criterion, device):
     return epoch_loss / len(iterator)
 
 def train_model(
-    model, num_epochs, train_loader, val_loader, device, optimizer, scheduler=None,smooth_f=0.05, diverge_th=5):
+    model, num_epochs, train_loader, val_loader, device, optimizer, scheduler=None,smooth_f= 1.0, diverge_th=3):
     loss_history = {'train': [], 'val': []}
     best_loss = float('inf')
     with tqdm(total=num_epochs, desc="Training Progress") as pbar:

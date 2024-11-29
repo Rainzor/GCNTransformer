@@ -391,11 +391,13 @@ class GraphTransformer(nn.Module):
         if pool == 'cls':
             # Extract the [CLS] token's features
             cls_features = x_transformed[:, 0, :]
-        else:
+        elif pool == 'mean':
             mask_unsqueeze = key_padding_mask.unsqueeze(-1).type_as(x_transformed)  # [batch_size, 1 + max_num_nodes, 1]
             sum_x = (x_dense * mask_unsqueeze).sum(dim=1)  # [batch_size, transformer_width]
             num_nodes = mask_unsqueeze.sum(dim=1)
             cls_features = sum_x / num_nodes
+        else:
+            raise ValueError('Invalid pooling type. Must be either "cls" or "mean".')
 
         # Extract the [CLS] token's features
         cls_features = self.ln_post(cls_features)  # [batch_size, transformer_width]

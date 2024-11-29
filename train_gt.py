@@ -141,7 +141,7 @@ def evaluate(model, iterator, criterion, device):
     return epoch_loss / len(iterator)
 
 def train_model(
-    model, num_epochs, train_loader, val_loader, device, optimizer, scheduler=None,smooth_f= 0.5, diverge_th=1.5):
+    model, num_epochs, train_loader, val_loader, device, optimizer, scheduler=None,smooth_f= 0.5, diverge_th = 2.0):
     loss_history = {'train': [], 'val': []}
     best_loss = float('inf')
     with tqdm(total=num_epochs, desc="Training Progress") as pbar:
@@ -164,11 +164,11 @@ def train_model(
                 best_loss = val_loss
             
             if val_loss > diverge_th * best_loss and epoch > 100:
-                print("Stopping early as the loss diverged.")
+                print("Stopping early as the val-loss diverged.")
                 break
 
-            if train_loss < 1e-3:
-                print("Stopping early as the loss is too low.")
+            if train_loss < 1e-4:
+                print("Stopping early as the train-loss is too low.")
                 break
 
             pbar.set_postfix({'Train Loss': f"{train_loss:.6f}", 'Val Loss': f"{val_loss:.6f}"})

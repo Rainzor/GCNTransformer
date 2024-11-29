@@ -182,6 +182,7 @@ class GNNEncoder(nn.Module):
 class MLP(nn.Module):
     def __init__(self, num_features, hidden_channels, output_channels, num_layers=2, activation=F.relu):
         super(MLP, self).__init__()
+        self.num_layers = num_layers
         self.layers = nn.ModuleList()
         self.layers.append(nn.Linear(num_features, hidden_channels))
         for _ in range(num_layers-2):
@@ -189,10 +190,10 @@ class MLP(nn.Module):
         self.layers.append(nn.Linear(hidden_channels, output_channels))
         self.activation = activation
     def forward(self, x):
-        for layer in self.layers[:-1]:
-            x = self.activation(layer(x))
-        
-        return self.layers[-1](x)
+        for i, layer in enumerate(self.layers):
+            x = layer(x)
+            if i < self.num_layers-1:
+                x = self.activation(x)
     
     def reset_parameters(self):
         for layer in self.layers:
@@ -328,19 +329,25 @@ class GraphTransformer(nn.Module):
         self.positional_encoder = PositionalEncoder(L=embedding_dim)
 
         # GCN module
-        self.gnn = GNNEncoder(num_features + embedding_dim*pos_dim, embedding_dim)
+        self.gnn = GNNEncoder(num_features + embedding_dim*pos_dim, transformer_width)
 
         # [CLS] token as a learnable embedding
         self.cls_token = nn.Parameter(torch.zeros(1, 1, transformer_width))
 
-        # Mapping GCN output to Transformer input dimension
-        self.gcn_to_transformer = nn.Linear(embedding_dim*(pos_dim+1), transformer_width)
+        # # Mapping GCN output to Transformer input dimension
+        # self.gcn_to_transformer = nn.Linear(embedding_dim*(pos_dim+1), transformer_width)
 
         # Layer normalization before Transformer
         self.ln_pre = nn.LayerNorm(transformer_width)
 
         # If positional encoding increases the dimension, adjust the transformer width accordingly
-        self.transformer = Transformer(width=transformer_width, layers=transformer_layers, heads=transformer_heads)
+        self.transformer = TransformerEncoder(
+                            d_model=transformer_width,
+                            n_head=transformer_heads,
+                            num_layers=transformer_layers,
+                            dim_feedforward=transformer_width*2,
+                            dropout=dropout
+                        )
 
         # Layer normalization after Transformer
         self.ln_post = nn.LayerNorm(transformer_width)
@@ -372,10 +379,10 @@ class GraphTransformer(nn.Module):
         # Extract node features using GCN
         x = self.gnn(x, edge_index)  # [total_num_nodes, gnn_width]
 
-        x = torch.cat([x, pos_enc], dim=-1) # [total_num_nodes, embedding_dim*(pos_dim+1)]
+        # x = torch.cat([x, pos_enc], dim=-1) # [total_num_nodes, embedding_dim*(pos_dim+1)]
 
         # Map to Transformer input dimension
-        x = self.gcn_to_transformer(x)  # [total_num_nodes, transformer_width]
+        # x = self.gcn_to_transformer(x)  # [total_num_nodes, transformer_width]
 
         # Extract the graph's features
         graph_features = self._read_out(x, batch, pool=self.pool)  # [batch_size, transformer_width]

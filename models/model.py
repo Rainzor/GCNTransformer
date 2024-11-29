@@ -194,6 +194,7 @@ class MLP(nn.Module):
             x = layer(x)
             if i < self.num_layers-1:
                 x = self.activation(x)
+        return x
     
     def reset_parameters(self):
         for layer in self.layers:

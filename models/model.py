@@ -237,16 +237,19 @@ class GraphTransformer(nn.Module):
         embedding_dim: int,  # Number of frequency components for PositionalEncoder
         pos_dim: int,  # Dimension of positional features
         dropout: float = 0.1,
+        pool: str = 'cls'
     ):
         super(GraphTransformer, self).__init__()
+        assert pool in ['cls', 'mean'], "pool must be either 'cls' or 'mean'"
         self.num_features = num_features
         self.output_dim = output_dim
+        self.pool = pool
 
         # Positional Encoder
         self.positional_encoder = PositionalEncoder(L=embedding_dim)
 
         # GCN module
-        self.gcn = GNNEncoder(num_features + embedding_dim*pos_dim, embedding_dim)
+        self.gnn = GNNEncoder(num_features + embedding_dim*pos_dim, embedding_dim)
 
         # [CLS] token as a learnable embedding
         self.cls_token = nn.Parameter(torch.zeros(1, 1, transformer_width))
@@ -415,27 +418,73 @@ class GraphTransformer(nn.Module):
 
         x = torch.cat([x, pos_enc], dim=-1)  # [total_num_nodes, num_features + embedding_dim * pos_dim]
         # Extract node features using GCN
-        x = self.gcn(x, edge_index)  # [total_num_nodes, embedding_dim]
+        x = self.gnn(x, edge_index)  # [total_num_nodes, embedding_dim]
 
         x = torch.cat([x, pos_enc], dim=-1) # [total_num_nodes, embedding_dim*(pos_dim+1)]
 
         # Map to Transformer input dimension
         x = self.gcn_to_transformer(x)  # [total_num_nodes, transformer_width]
 
-        x_dense, mask = to_dense_batch(x, batch)  # x_dense: [batch_size, max_num_nodes, transformer_width]; mask: [batch_size, max_num_nodes]
-
-        batch_size, max_num_nodes, _ = x_dense.size()
-
-        mask_unsqueeze = mask.unsqueeze(-1).type_as(x_dense)  # [batch_size, max_num_nodes, 1]
-        sum_x = (x_dense * mask_unsqueeze).sum(dim=1)  # [batch_size, transformer_width]
-        num_nodes = mask_unsqueeze.sum(dim=1)  # [batch_size, 1]
-        graph_features = sum_x / num_nodes.clamp(min=1)  # [batch_size, transformer_width]
+        # Extract the graph's features
+        graph_features = self._read_out(x, batch, pool=self.pool)  # [batch_size, transformer_width]
 
         # Pass through the decoder
         out = self.decoder(graph_features)  # [batch_size, output_dim]
 
         return out  # [batch_size, output_dim]
 
+    def _read_out(self, x, batch, pool='cls'):
+        # x_dense: [batch_size, max_num_nodes, transformer_width]; 
+        # mask: [batch_size, max_num_nodes]
+        x_dense, mask = to_dense_batch(x, batch)  
+        batch_size, max_num_nodes, _ = x_dense.size()
+
+        # Add [CLS] token
+        cls_tokens = self.cls_token.expand(batch_size, -1, -1)  # [batch_size, 1, transformer_width]
+
+        x_dense = torch.cat([cls_tokens, x_dense], dim=1)  # [batch_size, 1 + max_num_nodes, transformer_width]
+
+        # Add True for [CLS] tokens
+        cls_mask = torch.ones(batch_size, 1, dtype=torch.bool, device=x.device)
+        key_padding_mask = torch.cat([cls_mask, mask], dim=1)  # [batch_size, 1 + max_num_nodes]
+
+        # Permute to match Transformer input shape (sequence_length, batch_size, embedding_dim)
+        x_dense = x_dense.permute(1, 0, 2)  # [1 + max_num_nodes, batch_size, transformer_width]
+        x_dense = self.ln_pre(x_dense)
+
+        # Initialize the attention mask with causal masking
+        attn_mask = torch.triu(torch.ones(max_num_nodes+1, max_num_nodes+1, device=x.device), diagonal=1).bool()
+
+        # Allow [CLS] token (first token) to attend to all tokens
+        attn_mask[0, :] = False  # [CLS] can attend to all tokens including itself
+        # attn_mask[1:, 0] = True  # The other tokens cannot attend to [CLS]
+
+        # attn_mask = None
+
+        # Forward pass through Transformer
+        x_transformed = self.transformer(x_dense, 
+                                        attn_mask= attn_mask,
+                                        key_padding_mask=~key_padding_mask)  
+                                        # [1 + max_num_nodes, batch_size, transformer_width]
+
+        # Permute back to (batch_size, sequence_length, embedding_dim)
+        x_transformed = x_transformed.permute(1, 0, 2)  # [batch_size, 1 + max_num_nodes, transformer_width]
+
+        if pool == 'cls':
+            # Extract the [CLS] token's features
+            cls_features = x_transformed[:, 0, :]
+        elif pool == 'mean':
+            mask_unsqueeze = key_padding_mask.unsqueeze(-1).type_as(x_transformed)  # [batch_size, 1 + max_num_nodes, 1]
+            sum_x = (x_dense * mask_unsqueeze).sum(dim=1)  # [batch_size, transformer_width]
+            num_nodes = mask_unsqueeze.sum(dim=1)
+            cls_features = sum_x / num_nodes.clamp(min=1)
+        else:
+            raise ValueError('Invalid pooling type. Must be either "cls" or "mean".')
+
+        # Extract the [CLS] token's features
+        cls_features = self.ln_post(cls_features)  # [batch_size, transformer_width]
+
+        return cls_features  # [batch_size, transformer_width]
 
     def vmf_param(self, x, edge_index, p, batch=None):
         """

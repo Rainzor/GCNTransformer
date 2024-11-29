@@ -226,7 +226,7 @@ def main(args):
     # Define hyperparameters
     hyperparameters = {
         'num_features': datasets[0].x.size(1),
-        'gnn_dim': 256,
+        'gnn_dim': 128,
         'transformer_width': 256,
         'transformer_layers': 4,
         'transformer_heads': 8,

@@ -331,7 +331,7 @@ class GraphTransformer(nn.Module):
         self.positional_encoder = PositionalEncoder(L=embedding_dim)
         self.proj_to_gnn = nn.Linear(num_features + embedding_dim*pos_dim, gnn_dim)
         # GCN module
-        self.gnn = GNNEncoder(gnn_dim, gnn_dim)
+        self.gnn = GCN(gnn_dim, gnn_dim)
 
         self.proj_to_transformer = nn.Linear(gnn_dim, transformer_width) if gnn_dim != transformer_width else nn.Identity()
         
@@ -340,23 +340,19 @@ class GraphTransformer(nn.Module):
         # [CLS] token as a learnable embedding
         self.cls_token = nn.Parameter(torch.zeros(1, 1, transformer_width))
 
-        # # Mapping GCN output to Transformer input dimension
-        # self.gcn_to_transformer = nn.Linear(embedding_dim*(pos_dim+1), transformer_width)
-
-        # Layer normalization before Transformer
-        self.ln_pre = nn.Identity()
-
         # If positional encoding increases the dimension, adjust the transformer width accordingly
-        self.transformer = TransformerEncoder(
-                            d_model=transformer_width,
-                            n_head=transformer_heads,
-                            num_layers=transformer_layers,
-                            dim_feedforward=transformer_width*2,
-                            dropout=dropout
-                        )
-
-        # Layer normalization after Transformer
-        self.ln_post = nn.Identity()
+        # self.transformer = TransformerEncoder(
+        #                     d_model=transformer_width,
+        #                     n_head=transformer_heads,
+        #                     num_layers=transformer_layers,
+        #                     dim_feedforward=transformer_width*2,
+        #                     dropout=dropout
+        #                 )
+        self.transformer = Transformer(
+            width=transformer_width,
+            layers=transformer_layers,
+            heads=transformer_heads
+        )
 
       # Decoder with Batch Normalization
         self.decoder = MLP(transformer_width, hidden_dim, output_dim, num_layers=3, activation=GELU())
@@ -385,8 +381,9 @@ class GraphTransformer(nn.Module):
         # Extract node features using GCN
         x = self.proj_to_gnn(x)  # [total_num_nodes, gnn_dim]
         x = self.gnn(x, edge_index)  # [total_num_nodes, gnn_dim]
-        x = self.proj_to_transformer(x)  # [total_num_nodes, transformer_width]
 
+        # Project to Transformer input dimension
+        x = self.proj_to_transformer(x)  # [total_num_nodes, transformer_width]
         x = x + self.subgraph_pos_enc(pos_enc)  # [total_num_nodes, transformer_width]
 
         # Extract the graph's features
@@ -414,14 +411,12 @@ class GraphTransformer(nn.Module):
 
         # Permute to match Transformer input shape (sequence_length, batch_size, embedding_dim)
         x_dense = x_dense.permute(1, 0, 2)  # [1 + max_num_nodes, batch_size, transformer_width]
-        x_dense = self.ln_pre(x_dense)
 
         # Initialize the attention mask with causal masking
         attn_mask = torch.triu(torch.ones(max_num_nodes+1, max_num_nodes+1, device=x.device), diagonal=1).bool()
 
         # Allow [CLS] token (first token) to attend to all tokens
         attn_mask[0, :] = False  # [CLS] can attend to all tokens including itself
-        # attn_mask[1:, 0] = True  # The other tokens cannot attend to [CLS]
 
         # attn_mask = None
 
@@ -444,9 +439,6 @@ class GraphTransformer(nn.Module):
             cls_features = sum_x / num_nodes.clamp(min=1)
         else:
             raise ValueError('Invalid pooling type. Must be either "cls" or "mean".')
-
-        # Extract the [CLS] token's features
-        cls_features = self.ln_post(cls_features)  # [batch_size, transformer_width]
 
         return cls_features  # [batch_size, transformer_width]
 

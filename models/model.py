@@ -289,10 +289,10 @@ class GraphTransformer(nn.Module):
 
     def _init_weights(self):
         nn.init.trunc_normal_(self.cls_token, std=0.02)
-        # Initialize GCN to Transformer mapping
-        nn.init.trunc_normal_(self.gcn_to_transformer.weight, std=0.02)
-        if self.gcn_to_transformer.bias is not None:
-            nn.init.zeros_(self.gcn_to_transformer.bias)
+        # # Initialize GCN to Transformer mapping
+        # nn.init.trunc_normal_(self.gcn_to_transformer.weight, std=0.02)
+        # if self.gcn_to_transformer.bias is not None:
+        #     nn.init.zeros_(self.gcn_to_transformer.bias)
         # Positional Encoder weightare fixed (sinusoidal), no initialization needed
     
     def forward(self, x, edge_index, p, batch=None):

@@ -189,10 +189,10 @@ class MLP(nn.Module):
         self.layers.append(nn.Linear(hidden_channels, output_channels))
         self.activation = activation
     def forward(self, x):
-        for layer in self.layers:
-            x = layer(x)
-            x = self.activation(x)
-        return x
+        for layer in self.layers[:-1]:
+            x = self.activation(layer(x))
+        
+        return self.layers[-1](x)
     
     def reset_parameters(self):
         for layer in self.layers:

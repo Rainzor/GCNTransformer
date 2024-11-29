@@ -90,65 +90,84 @@ def save_checkpoint(model, optimizer, scheduler, epoch, hyperparameters, path):
     torch.save(checkpoint, path)
     print(f"Model saved to {path}")
 
-def train_model(
-    model, num_epochs, train_loader, val_loader, device, optimizer, scheduler=None):
-    loss_history = {'train': [], 'val': []}
+def train(model, iterator, optimizer, criterion, device):
+    
+    model.train()
+    
+    epoch_loss = 0
+    epoch_acc = 0
+    
+    for batch in iterator:
+        
+        batch = batch.to(device)
+        
+        optimizer.zero_grad()
+        
+        predictions = model(
+            batch.x,
+            batch.edge_index,
+            batch.pos,
+            batch.batch
+        ).reshape(-1)
+        
+        loss = criterion(predictions, batch.y)
+        
+        loss.backward()
+        
+        optimizer.step()
+        
+        epoch_loss += loss.item()
+        
+    return epoch_loss / len(iterator)
 
+def evaluate(model, iterator, criterion, device):
+    model.eval()
+
+    epoch_loss = 0
+
+    with torch.no_grad():
+        for batch in iterator:
+            batch = batch.to(device)
+            predictions = model(
+                batch.x,
+                batch.edge_index,
+                batch.pos,
+                batch.batch
+            ).reshape(-1)
+
+            loss = criterion(predictions, batch.y)
+            epoch_loss += loss.item()
+    
+    return epoch_loss / len(iterator)
+
+def train_model(
+    model, num_epochs, train_loader, val_loader, device, optimizer, scheduler=None,smooth_f=0.05, diverge_th=5):
+    loss_history = {'train': [], 'val': []}
+    best_loss = float('inf')
     with tqdm(total=num_epochs, desc="Training Progress") as pbar:
         for epoch in range(num_epochs):
-            model.train()
-            total_train_loss = 0
-            train_count = 0
-
-            for batch in train_loader:
-                batch = batch.to(device)
-                optimizer.zero_grad()
-
-                # Forward pass
-                predictions = model(
-                    batch.x,
-                    batch.edge_index,
-                    batch.pos,
-                    batch.batch
-                ).reshape(-1)
-
-                # Compute loss
-                loss = criterion(predictions, batch.y)
-                loss.backward()
-                optimizer.step()
-
-                total_train_loss += loss.item()
-                train_count += 1
-
-            average_train_loss = total_train_loss / train_count
-            loss_history['train'].append(average_train_loss)
-
-            # Validation phase
-            model.eval()
-            total_val_loss = 0
-            val_count = 0
-
-            with torch.no_grad():
-                for batch in val_loader:
-                    batch = batch.to(device)
-                    predictions = model(
-                        batch.x,
-                        batch.edge_index,
-                        batch.pos,
-                        batch.batch
-                    ).reshape(-1)
-
-                    loss = criterion(predictions, batch.y)
-                    total_val_loss += loss.item()
-                    val_count += 1
-
-            average_val_loss = total_val_loss / val_count
-            loss_history['val'].append(average_val_loss)
-
+            train_loss = train(model, train_loader, optimizer, F.mse_loss, device)
+            
             if scheduler:
                 scheduler.step()
 
-            pbar.set_postfix({'Train Loss': f"{average_train_loss:.6f}", 'Val Loss': f"{average_val_loss:.6f}"})
+            val_loss = evaluate(model, val_loader, F.mse_loss, device)
+
+            if epoch > 0:
+                train_loss = smooth_f * train_loss + (1 - smooth_f) * loss_history['train'][-1]
+                val_loss = smooth_f * val_loss + (1 - smooth_f) * loss_history['val'][-1]
+            
+            loss_history['train'].append(train_loss)
+            loss_history['val'].append(val_loss)
+
+            if val_loss < best_loss:
+                best_loss = val_loss
+            
+            if val_loss > diverge_th * best_loss and epoch > 100:
+                print("Stopping early as the loss diverged.")
+                break
+
+            pbar.set_postfix({'Train Loss': f"{train_loss:.6f}", 'Val Loss': f"{val_loss:.6f}"})
             pbar.update(1)
             
     return loss_history
@@ -180,7 +199,7 @@ def main(args):
         for i in range(file_num):
             # Load graph data
             parsed_cells = parse_cell_txt(graphs_path[i])
-            graph_data = get_gnn_dataset(parsed_cells, device)
+            graph_data = get_gnn_dataset(parsed_cells, device=device)
             
             # Load target data
             target_data = load_target_data(target_path[i], device)
@@ -206,7 +225,7 @@ def main(args):
         'transformer_width': 256,
         'transformer_layers': 4,
         'transformer_heads': 8,
-        'embedding_dim': 64,
+        'embedding_dim': 32,
         'pos_dim': datasets[0].pos.size(1),
         'dropout': 0.1,
         'hidden_dim': 512,
@@ -219,7 +238,7 @@ def main(args):
     }
 
     # Initialize model
-    gcn_transformer = GCNTransformer(
+    graph_transformer = GraphTransformer(
         num_features=hyperparameters['num_features'],
         transformer_width=hyperparameters['transformer_width'],
         transformer_layers=hyperparameters['transformer_layers'],
@@ -233,7 +252,7 @@ def main(args):
 
 
     # Initialize optimizer and scheduler
-    optimizer = Adam(gcn_transformer.parameters(), lr=hyperparameters['lr'], weight_decay=1e-4)
+    optimizer = Adam(graph_transformer.parameters(), lr=hyperparameters['lr'], weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.StepLR(
         optimizer,
         gamma=hyperparameters['gamma'],
@@ -255,7 +274,7 @@ def main(args):
 
     # Training starts from scratch
     loss_history = train_model(
-        gcn_transformer,
+        graph_transformer,
         hyperparameters['num_epochs'],
         train_loader,
         val_loader,
@@ -278,8 +297,8 @@ def main(args):
     for epoch, val_loss in enumerate(loss_history['val']):
         writer.add_scalar('Loss/Validation', val_loss, epoch)
     # Log final sample plots
-    log_sample_plots(gcn_transformer, train_dataset, X, sizes, writer, tag='Train', num_samples=4, device=device)
-    log_sample_plots(gcn_transformer, val_dataset, X, sizes, writer, tag='Validation', num_samples=4, device=device)
+    log_sample_plots(graph_transformer, train_dataset, X, sizes, writer, tag='Train', num_samples=4, device=device)
+    log_sample_plots(graph_transformer, val_dataset, X, sizes, writer, tag='Validation', num_samples=4, device=device)
 
     # Save the model checkpoint
     timestamp = time.strftime("%Y_%m_%d_%H_%M", time.localtime())
@@ -290,7 +309,7 @@ def main(args):
     else:
         model_save_path = os.path.join(output_dir, f"{args.model}_{timestamp}.pth")
 
-    save_checkpoint(gcn_transformer, optimizer, scheduler, hyperparameters['num_epochs'], hyperparameters, model_save_path)
+    save_checkpoint(graph_transformer, optimizer, scheduler, hyperparameters['num_epochs'], hyperparameters, model_save_path)
 
     # Close the TensorBoard writer
     writer.close()
@@ -306,6 +325,6 @@ if __name__ == "__main__":
     parser.add_argument("-n", "--num_epochs", type=int, default=3000, help="Number of training epochs.")
     parser.add_argument("-lr", "--learning_rate", type=float, default=2e-4, help="Learning rate for the optimizer.")
     parser.add_argument('-b', '--batch_size', type=int, default=8, help='Batch size per GPU')
-    parser.add_argument("--model", type=str, default="", help="Name to train (e.g., 'gcn_transformer').")
+    parser.add_argument("--model", type=str, default="", help="Name to train (e.g., 'graph_transformer').")
     args = parser.parse_args()
     main(args)

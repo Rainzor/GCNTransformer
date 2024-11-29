@@ -66,19 +66,19 @@ def sort_nodes_and_edges(node_features_np: np.ndarray, edges_np: np.ndarray):
     r = np.sqrt(x**2 + y**2 + z**2)
     phi = np.arctan2(z, y) % (2 * np.pi)
 
-    # 构造球坐标用于排序
+    # Combine spherical coordinates
     spherical_coords = np.stack((r, x, phi), axis=1)
 
-    # 按球坐标排序 (r, x, phi)
+    # Sort nodes based on spherical coordinates
     sorted_order = np.lexsort((spherical_coords[:, 2], spherical_coords[:, 1], spherical_coords[:, 0]))
     sorted_node_features_np = node_features_np[sorted_order]
 
-    # 创建从原始索引到排序后索引的映射
+    # Create mapping from original index to sorted index
     index_mapping = {original_idx: sorted_idx for sorted_idx, original_idx in enumerate(sorted_order)}
 
-    # 更新边索引
+    # Update edges based on sorted nodes
     sorted_edges = []
-    for edge in edges_np:  # 遍历每条边
+    for edge in edges_np:
         node1, node2 = edge
         sorted_node1 = index_mapping[node1]
         sorted_node2 = index_mapping[node2]
@@ -86,7 +86,7 @@ def sort_nodes_and_edges(node_features_np: np.ndarray, edges_np: np.ndarray):
 
     return sorted_node_features_np, sorted_edges
 
-def get_gnn_dataset(cells,json_path=None, device='cpu'):
+def get_gnn_dataset(cells, json_path=None, device='cpu'):
     """
     Converts cell data to a PyG graph dataset.
     Args:
@@ -94,7 +94,7 @@ def get_gnn_dataset(cells,json_path=None, device='cpu'):
     Returns:
         torch_geometric.data.Data: graph dataset
     """
-    # 节点特征: 使用cell_center (x, y, z, radius)
+    # Node Feature: 使用cell_center (x, y, z, radius)
     node_features = []
     edges = []
 

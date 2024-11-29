@@ -178,54 +178,98 @@ class GNNEncoder(nn.Module):
                         module.reset_parameters()
             layer.norm1.reset_parameters()
             layer.norm2.reset_parameters()
-    
-# Residual Attention Block
-class ResidualAttentionBlock(nn.Module):
-    def __init__(self, d_model: int, n_head: int):
-        super(ResidualAttentionBlock, self).__init__()
-        self.attn = nn.MultiheadAttention(d_model, n_head)
-        self.ln_1 = nn.LayerNorm(d_model)
-        self.mlp = nn.Sequential(OrderedDict([
-            ("c_fc", nn.Linear(d_model, d_model * 4)),
-            ("gelu", GELU()),
-            ("c_proj", nn.Linear(d_model * 4, d_model))
-        ]))
-        self.ln_2 = nn.LayerNorm(d_model)
 
-    def attention(self, x: torch.Tensor, attn_mask: torch.Tensor = None, key_padding_mask: torch.Tensor = None):
-        return self.attn(x, x, x, attn_mask=attn_mask, key_padding_mask=key_padding_mask)[0]
 
-    def forward(self, x: torch.Tensor, attn_mask: torch.Tensor = None, key_padding_mask: torch.Tensor = None):
-        x = x + self.attention(self.ln_1(x), attn_mask=attn_mask, key_padding_mask=key_padding_mask)
-        x = x + self.mlp(self.ln_2(x))
+class MLP(nn.Module):
+    def __init__(self, num_features, hidden_channels, output_channels, num_layers=2, activation=F.relu):
+        super(MLP, self).__init__()
+        self.layers = nn.ModuleList()
+        self.layers.append(nn.Linear(num_features, hidden_channels))
+        for _ in range(num_layers-2):
+            self.layers.append(nn.Linear(hidden_channels, hidden_channels))
+        self.layers.append(nn.Linear(hidden_channels, output_channels))
+        self.activation = activation
+    def forward(self, x):
+        for layer in self.layers:
+            x = layer(x)
+            x = self.activation(x)
         return x
+    
+    def reset_parameters(self):
+        for layer in self.layers:
+            layer.reset_parameters()
 
 
-# Transformer Module
-class Transformer(nn.Module):
-    def __init__(self, width: int, layers: int, heads: int):
-        super(Transformer, self).__init__()
-        self.width = width
-        self.layers = layers
-        self.resblocks = nn.ModuleList([
-            ResidualAttentionBlock(width, heads) for _ in range(layers)
+
+class TransformerLayer(nn.Module):
+    def __init__(self,
+                d_model,
+                nhead,
+                dim_feedforward=2048,
+                dropout=0.1,
+                activation=F.relu):
+        super(TransformerLayer, self).__init__()
+        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+
+        self.feedforward = MLP(d_model, dim_feedforward, d_model, num_layers=2, activation=activation)
+
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
+    
+    def _sa_block(self, x, attn_mask, key_padding_mask):
+        x = self.self_attn(x, x, x, attn_mask=attn_mask, key_padding_mask=key_padding_mask)[0]
+
+        return self.dropout1(x)
+
+    def _ff_block(self, x):
+        return self.dropout2(self.feedforward(x))
+
+    def forward(self, x, attn_mask=None, key_padding_mask=None):
+        x = x + self._sa_block(self.norm1(x), attn_mask, key_padding_mask)
+        x = x + self._ff_block(self.norm2(x))
+        return x
+    
+    def reset_parameters(self):
+        self.self_attn.reset_parameters()
+        self.feedforward.reset_parameters()
+        self.norm1.reset_parameters()
+        self.norm2.reset_parameters()
+
+class TransformerEncoder(nn.Module):
+    def __init__(self,
+                d_model,
+                nhead,
+                num_layers,
+                dim_feedforward=2048,
+                dropout=0.1):
+        super(TransformerEncoder, self).__init__()
+        self.layers = nn.ModuleList([
+            TransformerLayer(d_model, nhead, dim_feedforward, dropout, GELU())
+            for _ in range(num_layers)
         ])
-
-    def forward(self, x: torch.Tensor, attn_mask: torch.Tensor = None, key_padding_mask: torch.Tensor = None):
+    
+    def forward(self, x, attn_mask=None, key_padding_mask=None):
         """
         x: [sequence_length, batch_size, embedding_dim]
+        attn_mask: [sequence_length, sequence_length]
         key_padding_mask: [batch_size, sequence_length]
         """
-        seq_length = x.size(0)
-        device = x.device
-        for block in self.resblocks:
-            x = block(x, attn_mask=attn_mask, key_padding_mask=key_padding_mask)
+        for layer in self.layers:
+            x = layer(x, attn_mask, key_padding_mask)
         return x
+    
+    def reset_parameters(self):
+        for layer in self.layers:
+            layer.reset_parameters()
 
 
 
-# GCNTransformer class, mimicking Vision Transformer structure
-class GCNTransformer(nn.Module):
+
+# GraphTransformer class, mimicking Vision Transformer structure
+class GraphTransformer(nn.Module):
     def __init__(
         self,
         num_features: int,
@@ -239,7 +283,7 @@ class GCNTransformer(nn.Module):
         dropout: float = 0.1,
         pool = 'cls'
     ):
-        super(GCNTransformer, self).__init__()
+        super(GraphTransformer, self).__init__()
         assert pool in {'cls', 'mean'}, 'pool type must be either cls (cls token) or mean (mean pooling)'
         self.num_features = num_features
         self.output_dim = output_dim
@@ -248,42 +292,39 @@ class GCNTransformer(nn.Module):
         self.positional_encoder = PositionalEncoder(L=embedding_dim)
 
         # GCN module
-        self.gcn = GNNEncoder(num_features + embedding_dim*pos_dim, embedding_dim)
+        # self.gnn = GNNEncoder(num_features + embedding_dim*pos_dim, transformer_width)
+        self.gnn = GCNConv(num_features + embedding_dim*pos_dim, transformer_width)
 
         # [CLS] token as a learnable embedding
         self.cls_token = nn.Parameter(torch.zeros(1, 1, transformer_width))
 
-        # Mapping GCN output to Transformer input dimension
-        self.gcn_to_transformer = nn.Linear(embedding_dim*(pos_dim+1), transformer_width)
-
-        # Layer normalization before Transformer
         self.ln_pre = nn.LayerNorm(transformer_width)
 
         # If positional encoding increases the dimension, adjust the transformer width accordingly
-        self.transformer = Transformer(width=transformer_width, layers=transformer_layers, heads=transformer_heads)
+        self.transformer = TransformerEncoder(
+            transformer_width, 
+            transformer_heads, 
+            transformer_layers, 
+            dim_feedforward=transformer_width*4,
+            dropout=dropout
+        )   
 
-        # Layer normalization after Transformer
+
+
         self.ln_post = nn.LayerNorm(transformer_width)
 
       # Decoder with Batch Normalization
-        self.decoder = nn.Sequential(
-            nn.Linear(transformer_width, hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, output_dim)
-        )
+        self.decoder = MLP(transformer_width, 
+                            hidden_dim, 
+                            output_dim, 
+                            num_layers=3, 
+                            activation=F.relu)
 
         # Initialize weights
         self._init_weights()
 
     def _init_weights(self):
         nn.init.trunc_normal_(self.cls_token, std=0.02)
-        # Initialize GCN to Transformer mapping
-        nn.init.trunc_normal_(self.gcn_to_transformer.weight, std=0.02)
-        if self.gcn_to_transformer.bias is not None:
-            nn.init.zeros_(self.gcn_to_transformer.bias)
-        # Positional Encoder weightare fixed (sinusoidal), no initialization needed
     
     # CLS Version
     def forward(self, x, edge_index, p, batch=None):
@@ -300,19 +341,25 @@ class GCNTransformer(nn.Module):
 
         x = torch.cat([x, pos_enc], dim=-1)  # [total_num_nodes, num_features + embedding_dim * pos_dim]
         # Extract node features using GCN
-        x = self.gcn(x, edge_index)  # [total_num_nodes, embedding_dim]
+        x = self.gnn(x, edge_index)  # [total_num_nodes, transformer_width]
 
-        x = torch.cat([x, pos_enc], dim=-1) # [total_num_nodes, embedding_dim*(pos_dim+1)]
+        # Readout Graph Features
+        graph_features = self._read_out(x, batch, pool=self.pool)  # [batch_size, transformer_width]
 
-        # Map to Transformer input dimension
-        x = self.gcn_to_transformer(x)  # [total_num_nodes, transformer_width]
+        # Pass through the decoder
+        out = self.decoder(graph_features)  # [batch_size, output_dim]
 
-        x_dense, mask = to_dense_batch(x, batch)  # x_dense: [batch_size, max_num_nodes, transformer_width]; mask: [batch_size, max_num_nodes]
+        return out  # [batch_size, output_dim]
 
+    def _read_out(self, x, batch, pool='mean'):
+        # x_dense: [batch_size, max_num_nodes, transformer_width]; 
+        # mask: [batch_size, max_num_nodes]
+        x_dense, mask = to_dense_batch(x, batch)  
         batch_size, max_num_nodes, _ = x_dense.size()
 
         # Add [CLS] token
         cls_tokens = self.cls_token.expand(batch_size, -1, -1)  # [batch_size, 1, transformer_width]
+
         x_dense = torch.cat([cls_tokens, x_dense], dim=1)  # [batch_size, 1 + max_num_nodes, transformer_width]
 
         # Add True for [CLS] tokens
@@ -341,7 +388,7 @@ class GCNTransformer(nn.Module):
         # Permute back to (batch_size, sequence_length, embedding_dim)
         x_transformed = x_transformed.permute(1, 0, 2)  # [batch_size, 1 + max_num_nodes, transformer_width]
 
-        if self.pool == 'cls':
+        if pool == 'cls':
             # Extract the [CLS] token's features
             cls_features = x_transformed[:, 0, :]
         else:
@@ -353,10 +400,8 @@ class GCNTransformer(nn.Module):
         # Extract the [CLS] token's features
         cls_features = self.ln_post(cls_features)  # [batch_size, transformer_width]
 
-        # Pass through the decoder
-        out = self.decoder(cls_features)  # [batch_size, output_dim]
+        return cls_features
 
-        return out  # [batch_size, output_dim]
 
 
     def vmf_param(self, x, edge_index, p, batch=None):

@@ -274,7 +274,7 @@ def main():
     }
 
     # Initialize model
-    model = GCNTransformer(
+    model = GraphTransformer(
         num_features=hyperparameters['num_features'],
         transformer_width=hyperparameters['transformer_width'],
         transformer_layers=hyperparameters['transformer_layers'],

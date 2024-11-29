@@ -461,9 +461,6 @@ def main():
         "l2_lambda": l2_lambda,
         "num_epochs": num_epochs
     }
-
-
-    
     
     if data_path=="":
         if not os.path.isdir(base_path):

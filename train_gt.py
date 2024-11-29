@@ -226,6 +226,7 @@ def main(args):
     # Define hyperparameters
     hyperparameters = {
         'num_features': datasets[0].x.size(1),
+        'gnn_dim': 256,
         'transformer_width': 256,
         'transformer_layers': 4,
         'transformer_heads': 8,
@@ -244,6 +245,7 @@ def main(args):
     # Initialize model
     graph_transformer = GraphTransformer(
         num_features=hyperparameters['num_features'],
+        gnn_dim=hyperparameters['gnn_dim'],
         transformer_width=hyperparameters['transformer_width'],
         transformer_layers=hyperparameters['transformer_layers'],
         transformer_heads=hyperparameters['transformer_heads'],

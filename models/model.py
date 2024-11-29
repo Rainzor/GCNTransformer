@@ -310,6 +310,7 @@ class GraphTransformer(nn.Module):
     def __init__(
         self,
         num_features: int,
+        gnn_dim: int,
         transformer_width: int,
         transformer_layers: int,
         transformer_heads: int,
@@ -328,9 +329,13 @@ class GraphTransformer(nn.Module):
 
         # Positional Encoder
         self.positional_encoder = PositionalEncoder(L=embedding_dim)
-
+        self.proj_to_gnn = nn.Linear(num_features + embedding_dim*pos_dim, gnn_dim)
         # GCN module
-        self.gnn = GNNEncoder(num_features + embedding_dim*pos_dim, transformer_width)
+        self.gnn = GNNEncoder(gnn_dim, gnn_dim)
+
+        self.proj_to_transformer = nn.Linear(gnn_dim, transformer_width) if gnn_dim != transformer_width else nn.Identity()
+        
+        self.subgraph_pos_enc = nn.Linear(pos_dim * embedding_dim, transformer_width)
 
         # [CLS] token as a learnable embedding
         self.cls_token = nn.Parameter(torch.zeros(1, 1, transformer_width))
@@ -339,7 +344,7 @@ class GraphTransformer(nn.Module):
         # self.gcn_to_transformer = nn.Linear(embedding_dim*(pos_dim+1), transformer_width)
 
         # Layer normalization before Transformer
-        self.ln_pre = nn.LayerNorm(transformer_width)
+        self.ln_pre = nn.Identity()
 
         # If positional encoding increases the dimension, adjust the transformer width accordingly
         self.transformer = TransformerEncoder(
@@ -351,7 +356,7 @@ class GraphTransformer(nn.Module):
                         )
 
         # Layer normalization after Transformer
-        self.ln_post = nn.LayerNorm(transformer_width)
+        self.ln_post = nn.Identity()
 
       # Decoder with Batch Normalization
         self.decoder = MLP(transformer_width, hidden_dim, output_dim, num_layers=3, activation=GELU())
@@ -378,12 +383,11 @@ class GraphTransformer(nn.Module):
 
         x = torch.cat([x, pos_enc], dim=-1)  # [total_num_nodes, num_features + embedding_dim * pos_dim]
         # Extract node features using GCN
-        x = self.gnn(x, edge_index)  # [total_num_nodes, gnn_width]
+        x = self.proj_to_gnn(x)  # [total_num_nodes, gnn_dim]
+        x = self.gnn(x, edge_index)  # [total_num_nodes, gnn_dim]
+        x = self.proj_to_transformer(x)  # [total_num_nodes, transformer_width]
 
-        # x = torch.cat([x, pos_enc], dim=-1) # [total_num_nodes, embedding_dim*(pos_dim+1)]
-
-        # Map to Transformer input dimension
-        # x = self.gcn_to_transformer(x)  # [total_num_nodes, transformer_width]
+        x = x + self.subgraph_pos_enc(pos_enc)  # [total_num_nodes, transformer_width]
 
         # Extract the graph's features
         graph_features = self._read_out(x, batch, pool=self.pool)  # [batch_size, transformer_width]

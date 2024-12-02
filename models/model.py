@@ -5,197 +5,13 @@ from torch_geometric.nn import GCNConv, GraphConv, GATConv, SAGEConv
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
 from torch_geometric.utils import to_dense_batch
+from torch_scatter import scatter
 
 import math
 import numpy as np
 
-
-class PositionalEncoder(nn.Module):
-    def __init__(self, L):
-        """
-        Initializes the PositionalEncoder module.
-
-        Parameters:
-        - L (int): Number of frequency components in the encoding.
-        """
-        super(PositionalEncoder, self).__init__()
-        self.L = L
-
-        # Precompute the frequency terms (2^k * pi)
-        frequencies = torch.tensor([1 << i for i in range(L)], dtype=torch.float32) * math.pi
-        self.register_buffer('frequencies', frequencies)  # Shape: (L,)
-
-    def forward(self, p):
-        """
-        Computes the positional encoding gamma(p) for a given input p in the range [-1, 1].
-
-        Parameters:
-        - p (torch.Tensor): Input tensor of shape (batch_size, dim) with values in the range [-1, 1].
-
-        Returns:
-        - torch.Tensor: Positional encoding of shape (batch_size, dim * L).
-        """
-        # Ensure p is on the same device as frequencies
-        # (Not needed since frequencies will be moved with the model)
-
-        # Ensure p has the correct shape to broadcast with frequencies
-        p = p.unsqueeze(-1)  # Shape: (batch_size, dim, 1)
-        
-        # Apply sin transformation only
-        sin_encodings = torch.sin(p * self.frequencies)  # Shape: (batch_size, dim, L) 
-
-        return sin_encodings.view(p.size(0), -1)  # Shape: (batch_size, dim * L)
-
-
-
-class GELU(nn.Module):
-    def __init__(self):
-        super(GELU, self).__init__()
-
-    def forward(self, x):
-        return 0.5 * x * (1 + F.tanh(np.sqrt(2 / np.pi) * (x + 0.044715 * torch.pow(x,3))))
-
-# GCN Module with Residual Connections
-class GCN(nn.Module):
-    def __init__(self, num_features, hidden_channels):
-        super(GCN, self).__init__()
-        # GCN Layers
-        self.conv1 = GCNConv(num_features, hidden_channels)
-        self.conv2 = GCNConv(hidden_channels, hidden_channels)
-        self.conv3 = GCNConv(hidden_channels, hidden_channels)
-        self.skip1 = nn.Linear(num_features, hidden_channels) if num_features != hidden_channels else nn.Identity()
-        self.skip2 = nn.Identity()
-        self.skip3 = nn.Identity()
-
-    def forward(self, x, edge_index):
-        # First Layer with Skip Connection
-        residual = self.skip1(x)
-        x = self.conv1(x, edge_index)
-        x = F.relu(x + residual)
-        x = F.dropout(x, p=0.3, training=self.training)
-        
-        # Second Layer with Skip Connection
-        residual = self.skip2(x)
-        x = self.conv2(x, edge_index)
-        x = F.relu(x + residual)
-        x = F.dropout(x, p=0.3, training=self.training)
-        
-        # Third Layer with Skip Connection
-        residual = self.skip3(x)
-        x = self.conv3(x, edge_index)
-        x = F.relu(x + residual)
-        x = F.dropout(x, p=0.3, training=self.training)
-        
-        return x
-
-    def reset_parameters(self):
-        self.conv1.reset_parameters()
-        self.conv2.reset_parameters()
-        self.conv3.reset_parameters()
-        if isinstance(self.skip1, nn.Linear):
-            self.skip1.reset_parameters()
-
-
-
-
-class GATBlock(nn.Module):
-    def __init__(self, d_in, d_out, heads=8, dropout=0.3, activation=F.elu):
-        super(GATBlock, self).__init__()
-        
-        assert d_out % heads == 0, "d_out must be divisible by heads"
-
-        self.d_out = d_out
-        self.num_heads = heads
-        self.head_dim = d_out//heads
-
-
-        # Multi-head GAT Layer
-        self.attention = GATConv(
-            d_in, 
-            self.head_dim, 
-            heads=self.num_heads, 
-            dropout=dropout,
-            residual=True
-        )
-        
-        # Layer Normalization
-        self.norm1 = nn.LayerNorm(d_out)
-        self.norm2 = nn.LayerNorm(d_out)
-
-        # Feedforward Layer
-        self.feedforward = nn.Sequential(
-            nn.Linear(d_out, d_out*4),
-            GELU(),
-            nn.Linear(d_out*4, d_out)
-        )       
-        # Dropout Layer
-        self.dropout = nn.Dropout(dropout)
-        
-    def forward(self, x, edge_index):
-        x = self.norm1(x)
-        x = self.attention(x,edge_index)
-        x = self.norm2(x)
-        x = x + self.dropout(self.feedforward(x))
-        return x
-
-class GNNEncoder(nn.Module):
-    def __init__(self, num_features, emb_dim, num_layers=3, heads=8, dropout=0.3):
-        super(GNNEncoder, self).__init__()
-        self.layers = nn.ModuleList()
-        
-        if num_features != emb_dim:
-            self.Linear = nn.Linear(num_features, emb_dim)
-
-        # Hidden Layers
-        for _ in range(num_layers):
-            self.layers.append(GATBlock(
-                d_in=emb_dim,
-                d_out=emb_dim,
-                heads=heads,
-                dropout=dropout
-            ))
-        
-    def forward(self, x, edge_index):
-        if hasattr(self, 'Linear'):
-            x = self.Linear(x)
-            x = F.elu(x)
-
-        for layer in self.layers:
-            x = layer(x, edge_index)
-        return x
-    
-    def reset_parameters(self):
-        if hasattr(self, 'Linear'):
-            self.Linear.reset_parameters()
-        for layer in self.layers:
-            layer.attention.reset_parameters()
-            if isinstance(layer.feedforward, nn.Sequential):
-                for module in layer.feedforward:
-                    if isinstance(module, nn.Linear):
-                        module.reset_parameters()
-            layer.norm1.reset_parameters()
-            layer.norm2.reset_parameters()
-
-class MLP(nn.Module):
-    def __init__(self, num_features, hidden_channels, output_channels, num_layers=2, activation=F.relu):
-        super(MLP, self).__init__()
-        self.num_layers = num_layers
-        self.layers = nn.ModuleList()
-        self.layers.append(nn.Linear(num_features, hidden_channels))
-        for _ in range(num_layers-2):
-            self.layers.append(nn.Linear(hidden_channels, hidden_channels))
-        self.layers.append(nn.Linear(hidden_channels, output_channels))
-        self.activation = activation
-    def forward(self, x):
-        for i, layer in enumerate(self.layers):
-            x = layer(x)
-            if i < self.num_layers-1:
-                x = self.activation(x)
-        return x
-    
-    def reset_parameters(self):
-        for layer in self.layers:
-            layer.reset_parameters()
+from models.elements import PositionalEncoder, GELU, MLP
+from models.gnn import GNN
 
 class TransformerLayer(nn.Module):
     def __init__(self,
@@ -260,13 +76,13 @@ class TransformerEncoder(nn.Module):
         for layer in self.layers:
             layer.reset_parameters()
 
-
 # GraphTransformer class, mimicking Vision Transformer structure
 class GraphTransformer(nn.Module):
     def __init__(
         self,
         num_features: int,
         gnn_dim: int,
+        gnn_layers: int,
         transformer_width: int,
         transformer_layers: int,
         transformer_heads: int,
@@ -275,23 +91,34 @@ class GraphTransformer(nn.Module):
         embedding_dim: int,  # Number of frequency components for PositionalEncoder
         pos_dim: int,  # Dimension of positional features
         dropout: float = 0.1,
-        pool: str = 'cls'
+        gnn_type: str = 'GCNConv',
+        pool: str = 'cls',
+        patch_rw_dim=0
     ):
         super(GraphTransformer, self).__init__()
         assert pool in ['cls', 'mean'], "pool must be either 'cls' or 'mean'"
         self.num_features = num_features
         self.output_dim = output_dim
         self.pool = pool
+        self.patch_rw_dim = patch_rw_dim
+        self.gnn_layers = gnn_layers
 
         # Positional Encoder
         self.positional_encoder = PositionalEncoder(L=embedding_dim)
         self.proj_to_gnn = nn.Linear(num_features + embedding_dim*pos_dim, gnn_dim)
         # GCN module
-        self.gnn = GCN(gnn_dim, gnn_dim)
+        self.gnn = nn.ModuleList([
+                    GNN(nin=gnn_dim, nout=gnn_dim, nlayer_gnn=1, gnn_type=gnn_type, bn=False, dropout=dropout)
+                    for _ in range(gnn_layers)
+                ])
+        self.U = nn.ModuleList(
+            [MLP(gnn_dim, gnn_dim, num_layers=1, with_final_activation=True, batch_norm=True) for _ in range(gnn_layers-1)])
 
         self.proj_to_transformer = nn.Linear(gnn_dim, transformer_width) if gnn_dim != transformer_width else nn.Identity()
-        
+
         self.subgraph_pos_enc = nn.Linear(pos_dim * embedding_dim, transformer_width)
+        if self.patch_rw_dim > 0:
+            self.patch_rw_encoder = nn.Linear(patch_rw_dim, transformer_width)
 
         # [CLS] token as a learnable embedding
         self.cls_token = nn.Parameter(torch.zeros(1, 1, transformer_width))
@@ -306,7 +133,7 @@ class GraphTransformer(nn.Module):
                         )
 
       # Decoder with Batch Normalization
-        self.decoder = MLP(transformer_width, hidden_dim, output_dim, num_layers=3, activation=GELU())
+        self.decoder = MLP(transformer_width, hidden_dim, output_dim, num_layers=3, activation=GELU(), batch_norm=False, with_final_activation=False)
 
         # Initialize weights
         self._init_weights()
@@ -316,74 +143,98 @@ class GraphTransformer(nn.Module):
 
         # Positional Encoder weightare fixed (sinusoidal), no initialization needed
     
-    def forward(self, x, edge_index, p, batch=None):
+    def forward(self, data):
         """
-        x: [total_num_nodes, num_features]
-        edge_index: [2, num_edges]
-        p: [total_num_nodes, pos_dim], positional features for each node in the range [-1, 1]
-        batch: [total_num_nodes], indicating the graph index each node belongs to
-        """
-        if batch is None:
-            batch = torch.zeros(x.size(0), dtype=torch.long, device=x.device)
+        Forward pass through the model.
 
-        pos_enc = self.positional_encoder(p)  # [total_num_nodes, embedding_dim * pos_dim]
+        Parameters:
+        - data (Data): Graph data object containing node features, edge indices, positional features, etc.
+        """
+        B, P = data.mask.size()
+        x = data.x
+        edge_index = data.combined_subgraphs
+        batch_x = data.subgraphs_batch        
+        pos = data.pos
+
+        pos_enc = self.positional_encoder(pos)  # [total_num_nodes, embedding_dim * pos_dim]
 
         x = torch.cat([x, pos_enc], dim=-1)  # [total_num_nodes, num_features + embedding_dim * pos_dim]
         # Extract node features using GCN
         x = self.proj_to_gnn(x)  # [total_num_nodes, gnn_dim]
-        x = self.gnn(x, edge_index)  # [total_num_nodes, gnn_dim]
+        x = x[data.subgraphs_nodes_mapper]  # [combined_num_nodes, gnn_dim]
+        for i in range(self.gnn_layers):
+            if i > 0:
+                # scatter the node features to the subgraphs
+                subgraph = scatter(x, batch_x, dim=0, reduce='mean',dim_size= P*B)[batch_x] # [combined_num_nodes, gnn_dim]
+                # add subgraph global features to the node features
+                x = x + self.U[i-1](subgraph)
+                # scatter the node features back to the nodes
+                # because some nodes may belong to multiple subgraphs
+                x = scatter(x, data.subgraphs_nodes_mapper,
+                            dim=0, reduce='mean')[data.subgraphs_nodes_mapper]
+                
+            x = self.gnn[i](x, edge_index)
+        
+        subgraph_x = scatter(x, batch_x, dim=0, reduce='mean',dim_size= B*P)  # [B*P, gnn_dim]
 
         # Project to Transformer input dimension
-        x = self.proj_to_transformer(x)  # [total_num_nodes, transformer_width]
-        x = x + self.subgraph_pos_enc(pos_enc)  # [total_num_nodes, transformer_width]
+        subgraph_x = self.proj_to_transformer(subgraph_x)  # [B*P, transformer_width]
+        sub_pos_enc = self.positional_encoder(data.patch_pos)  # [B*P, embedding_dim * pos_dim]
+        subgraph_x += self.subgraph_pos_enc(sub_pos_enc)  # [B*P, transformer_width]
+        if self.patch_rw_dim > 0:
+            subgraph_x += self.patch_rw_encoder(data.patch_pe)  # [B*P, transformer_width]
+
+        # Reshape to patches
+        trans_x = subgraph_x.view(B, P, -1)  # [batch_size, num_patches, transformer_width]
+        trans_mask = data.mask  # [batch_size, num_patches]
+        
 
         # Extract the graph's features
-        graph_features = self._readout(x, batch, pool=self.pool)  # [batch_size, transformer_width]
+        graph_features = self._readout(trans_x, trans_mask, pool=self.pool)  # [batch_size, transformer_width]
 
         # Pass through the decoder
         out = self.decoder(graph_features)  # [batch_size, output_dim]
 
         return out  # [batch_size, output_dim]
-
-    def _readout(self, x, batch, pool='cls'):
-        # x_dense: [batch_size, max_num_nodes, transformer_width]; 
-        # mask: [batch_size, max_num_nodes]
-        x_dense, mask = to_dense_batch(x, batch)  
-        batch_size, max_num_nodes, _ = x_dense.size()
+    
+    def _readout(self, x, mask, pool='cls'):
+        # x: [batch_size, num_patchs, transformer_width]; 
+        # mask: [batch_size, num_patchs, 1]
+        B, P, _ = x.size()
 
         # Add [CLS] token
-        cls_tokens = self.cls_token.expand(batch_size, -1, -1)  # [batch_size, 1, transformer_width]
+        cls_tokens = self.cls_token.expand(B, -1, -1)  # [batch_size, 1, transformer_width]
 
-        x_dense = torch.cat([cls_tokens, x_dense], dim=1) if pool == 'cls' else x_dense
+        x = torch.cat([cls_tokens, x], dim=1) if pool == 'cls' else x
 
         # Add True for [CLS] tokens
-        cls_mask = torch.ones(batch_size, 1, dtype=torch.bool, device=x.device)
+        cls_mask = torch.ones(B, 1, dtype=torch.bool, device=x.device)
         key_padding_mask = torch.cat([cls_mask, mask], dim=1) if pool == 'cls' else mask
 
         # Permute to match Transformer input shape (sequence_length, batch_size, embedding_dim)
-        x_dense = x_dense.permute(1, 0, 2)  # [1 + max_num_nodes, batch_size, transformer_width]
+        x = x.permute(1, 0, 2)  # [1 + num_patchs, batch_size, transformer_width]
 
         # Initialize the attention mask with causal masking
         if pool == 'cls':
-            attn_mask = torch.triu(torch.ones(max_num_nodes+1, max_num_nodes+1, device=x.device), diagonal=1).bool() 
+            attn_mask = torch.triu(torch.ones(P+1, P+1, device=x.device), diagonal=1).bool() 
             attn_mask[0, :] = False  # [CLS] can attend to all tokens including itself
         elif pool == 'mean':
-            attn_mask = torch.triu(torch.ones(max_num_nodes, max_num_nodes, device=x.device), diagonal=1).bool()
+            attn_mask = torch.triu(torch.ones(P, P, device=x.device), diagonal=1).bool()
 
         # Forward pass through Transformer
-        x_transformed = self.transformer(x_dense, 
+        x_transformed = self.transformer(x, 
                                         attn_mask= attn_mask,
                                         key_padding_mask=~key_padding_mask)  
-                                        # [1 + max_num_nodes, batch_size, transformer_width]
+                                        # [1 + num_patchs, batch_size, transformer_width]
 
         # Permute back to (batch_size, sequence_length, embedding_dim)
-        x_transformed = x_transformed.permute(1, 0, 2)  # [batch_size, 1 + max_num_nodes, transformer_width]
+        x_transformed = x_transformed.permute(1, 0, 2)  # [batch_size, 1 + num_patchs, transformer_width]
 
         if pool == 'cls':
             # Extract the [CLS] token's features
             cls_features = x_transformed[:, 0, :]
         elif pool == 'mean':
-            mask_unsqueeze = key_padding_mask.unsqueeze(-1).type_as(x_transformed)  # [batch_size, 1 + max_num_nodes, 1]
+            mask_unsqueeze = key_padding_mask.unsqueeze(-1).type_as(x_transformed)  # [batch_size, 1 + num_patchs, 1]
             sum_x = (x_dense * mask_unsqueeze).sum(dim=1)  # [batch_size, transformer_width]
             num_nodes = mask_unsqueeze.sum(dim=1)
             cls_features = sum_x / num_nodes.clamp(min=1)
@@ -391,24 +242,13 @@ class GraphTransformer(nn.Module):
 
         return cls_features  # [batch_size, transformer_width]
 
-    def vmf_param(self, x, edge_index, p, batch=None):
+    def vmf_param(self, data):
         """
         Computes the von Mises-Fisher (vMF) parameters from the model output.
-        
-        Parameters:
-        - x (torch.Tensor): Feature tensor，Shape [total_num_nodes, num_features]
-        - edge_index (torch.Tensor): Edge index tensor，Shape [2, num_edges]
-        - p (torch.Tensor): Positional features tensor，Shape [total_num_nodes, pos_dim]
-        - batch (torch.Tensor): Batch tensor，Shape [total_num_nodes]
-        
-        Returns:
-        - weights (torch.Tensor): [batch_size, num_vmf]
-        - mus (torch.Tensor): [batch_size, num_vmf, 3]
-        - kappas (torch.Tensor): [batch_size, num_vmf]
         """
         with torch.no_grad():
             # Forward pass through the model
-            out = self(x, edge_index, p, batch)  # [batch_size, output_dim]
+            out = self(data)  # [batch_size, output_dim]
             
             # Batch size
             batch_size = out.size(0)  # [batch_size]

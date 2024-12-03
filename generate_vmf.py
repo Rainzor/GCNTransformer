@@ -107,8 +107,7 @@ def getpath(subdir):
                 paths.append((rawFirstDataPath, vmfFirstPath))
                 paths.append((rawShellDataPath, vmfShellPath))
     else:
-        print(f"Error: The file '{output_json_path}' does not exist.")
-        sys.exit(1)
+        print(f"Warning: The file '{output_json_path}' does not exist, skipping this directory.")
     return paths
 
 def main():
@@ -185,7 +184,7 @@ def main():
         
         json_file = os.path.join(base_path, "data.json")
         if not os.path.isfile(json_file):
-            print(f"Error: The file '{json_file}' does not exist.")
+            print(f"Warning: The file '{json_file}' does not exist.")
             sys.exit(1)
         
         folder_num = 0

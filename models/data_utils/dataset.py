@@ -87,7 +87,6 @@ def sort_nodes_and_edges_bfs(pos_np, edges_np):
 
     return np.array(new_order)  # Shape [num_nodes]
 
-
 def load_target_data(filename, device='cpu'):
     """
     Loads ray data from parameter file.
@@ -158,12 +157,29 @@ def get_gnn_dataset(cells, json_path=None, device='cpu'):
 
     return data
 
+def get_gridX(sizes, device):
+    i_idx = torch.arange(sizes[0], dtype=torch.float, device=device) / sizes[0]
+    j_idx = torch.arange(sizes[1], dtype=torch.float, device=device) / sizes[1]
+    i_grid, j_grid = torch.meshgrid(i_idx, j_idx, indexing='ij')
+    pos_x = i_grid * 2 - 1
+    pos_phi = (j_grid * 2 - 1) * np.pi
+    pos_r = torch.sqrt(1 - pos_x**2)
+    pos_y = pos_r * torch.cos(pos_phi)
+    pos_z = pos_r * torch.sin(pos_phi)
+    X = torch.stack((pos_x, pos_y, pos_z), dim=-1).reshape(-1, 3).to(device)
+    return X
 
 # Load raw data: ray position and ray direction
-def load_rawdata(filename, sizes, device='cpu', verbose=False):
+def load_rawdata(filename, sizes, device, verbose=False, dtype=np.float32):
     X = get_gridX(sizes, device)
 
-    rawdata = np.fromfile(filename, dtype=np.float32)
+    rawdata = np.fromfile(filename, dtype=dtype)
+    
+    # 如果是 float16，转换为 float32
+    if dtype == np.float16:
+        if verbose:
+            print(f"Converting data from float16 to float32")
+        rawdata = rawdata.astype(np.float32)
     rawdata = rawdata.reshape(-1, 4)
     # print(rawdata.shape)
     x = rawdata[:,0]
@@ -188,7 +204,8 @@ def load_rawdata(filename, sizes, device='cpu', verbose=False):
     ray_data = ray_data / torch.sum(ray_data) / area
     
     raw_X = np.column_stack((x, y, z))
-    raw_num = min(4096, raw_X.shape[0])
+    np.random.shuffle(raw_X)
+    raw_num = min(8192, raw_X.shape[0])
     raw_X = raw_X[:raw_num, :]
 
     raw_data = torch.tensor(raw_X, dtype=torch.float32, device=device)

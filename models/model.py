@@ -276,3 +276,42 @@ class GraphTransformer(nn.Module):
             )  # [batch_size, num_vmf, 3]
             
             return weights, mus, kappas
+
+
+class vMFMixtureModel(nn.Module):
+    def __init__(self, num_components):
+        super(vMFMixtureModel, self).__init__()
+        self.num_components = num_components
+
+        # 混合系数的对数几率
+        self.w_logits = nn.Parameter(torch.randn(num_components))
+
+        # 角度参数 theta 和 phi
+        self.theta_phi = nn.Parameter(torch.randn(2 * num_components)*3)
+
+        # 浓度参数的对数
+        self.log_kappa = nn.Parameter(torch.randn(num_components))
+
+    def forward(self):
+        # 计算混合系数
+        weight = F.softmax(self.w_logits, dim=0)
+
+        # 使用 sigmoid 将 theta 和 phi 限制在 [0,1]
+        theta_phi = torch.sigmoid(self.theta_phi)
+
+        # 映射到实际角度范围
+        theta = theta_phi[:self.num_components] * math.pi          # [0, π]
+        phi = theta_phi[self.num_components:] * 2 * math.pi        # [0, 2π]
+
+        # 计算球坐标系下的 μ
+        cos_theta = torch.cos(theta)
+        sin_theta = torch.sin(theta)
+        cos_phi = torch.cos(phi)
+        sin_phi = torch.sin(phi)
+        mu = torch.stack((sin_theta * cos_phi, sin_theta * sin_phi, cos_theta), dim=1)  # Shape: (num_components, 3)
+
+        # 计算浓度参数
+        kappa = torch.exp(self.log_kappa)
+        # kappa = torch.clamp(kappa, min=1e-10, max=1e5)  # 限制 kappa 的最大值，防止数值不稳定
+
+        return weight, mu, kappa

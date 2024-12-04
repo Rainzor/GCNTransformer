@@ -91,7 +91,7 @@ def train_process(model, optimizer, scheduler, dataset, hyperparams, device, sav
     dataset['samples'] = dataset['samples'].to(device)
     dataset['target'] = dataset['target'].to(device)
     dataset['w_data'] = dataset['w_data'].to(device)
-    
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.5)
     # 开始训练
     train_model(0, model, optimizer, scheduler, dataset, hyperparams, device, save_path=save_path)
 
@@ -215,14 +215,14 @@ def main():
         start_time = time.time()
         models = []
         optimizers = []
-        schedulers = []
         for i in range(num_models):
             device_i = available_devices[i % len(available_devices)]  # Set device for each process
             vmf = vMFMixtureModel(num_components=num_components).to(device_i)
             optimizer = torch.optim.Adam(vmf.parameters(), lr=learning_rate, weight_decay=weight_decay)
             models.append(vmf)
             optimizers.append(optimizer)
-            schedulers.append(torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.5))
+            
+        
         processes = []
         for i in range(num_models):
             device_i = available_devices[i % len(available_devices)]  # Set device for each process
@@ -236,7 +236,7 @@ def main():
             }
             
             p = mp.Process(target=train_process, args=(
-                models[i], optimizers[i], schedulers[i], dataset, hyperparams, device_i, sp))
+                models[i], optimizers[i], dataset, hyperparams, device_i, sp))
             processes.append(p)
             p.start()
 

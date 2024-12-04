@@ -213,12 +213,18 @@ def main():
     if args.multi_gpu:
         print(f"Using multi-GPU training.")
         start_time = time.time()
+        models = []
+        optimizers = []
+        schedulers = []
+        for i in range(num_models):
+            device_i = available_devices[i % len(available_devices)]  # Set device for each process
+            models.append(vMFMixtureModel(num_components=num_components).to(device_i))
+            optimizers.append(torch.optim.Adam(vmf.parameters(), lr=learning_rate, weight_decay=weight_decay))
+            schedulers.append(torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.5))
         processes = []
         for i in range(num_models):
             device_i = available_devices[i % len(available_devices)]  # Set device for each process
-            vmf = vMFMixtureModel(num_components=num_components).to(device_i)
-            optimizer = torch.optim.Adam(vmf.parameters(), lr=learning_rate, weight_decay=weight_decay)
-            scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.5)
+
             rp, sp = rawdata_paths[i]
             raw_data, ray_data = load_rawdata(rp, sizes, verbose=False, dtype=dtype)
             dataset = {
@@ -228,7 +234,7 @@ def main():
             }
             
             p = mp.Process(target=train_process, args=(
-                vmf, optimizer, scheduler, dataset, hyperparams, device_i, sp))
+                models[i], optimizers[i], schedulers[i], dataset, hyperparams, device_i, sp))
             processes.append(p)
             p.start()
 

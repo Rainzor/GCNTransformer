@@ -21,8 +21,6 @@ from models.model import vMFMixtureModel
 from models.loss import negative_log_likelihood
 from models.data_utils.utils import load_rawdata
 
-# Set the device if available
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def train_model(model_id, vmf, optimizer, scheduler,  dataset, hyperparams, device, parent_pbar=None, save_path=None, verbose=False):
     kl_lambda = hyperparams['kl_lambda']
@@ -142,14 +140,7 @@ def main():
                         help='Sizes as a comma-separated list of integers. Example: "64,64"')
     parser.add_argument("--dtype", type=int, default="32",
                         help="Data type of raw data")
-    # 默认设备设为所有可用GPU，如果没有GPU则为CPU
-    if torch.cuda.is_available():
-        default_device = 'cuda'
-    else:
-        default_device = 'cpu'
-    parser.add_argument('--device', type=str, default=default_device,
-                        help='Computation device. Defaults to CUDA if available, otherwise CPU.')
-
+    parser.add_argument('--multi_gpu', action='store_false',)
     args = parser.parse_args()
     if args.data_path=="" and args.base_path=="":
         print("Error: Either --data_path or --base_path must be specified.")
@@ -168,9 +159,9 @@ def main():
     l2_lambda = args.l2_lambda
     learning_rate = args.learning_rate
     weight_decay = args.weight_decay
-    device = args.device
     dtype = np.float32 if args.dtype==32 else np.float16
     
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     available_devices = [torch.device(f'cuda:{i}') for i in range(torch.cuda.device_count())]
     print(f"Available devices number: {len(available_devices)}")
 
@@ -210,6 +201,11 @@ def main():
     if args.num_data > 0:
         num_models = min(args.num_data, num_models)
         rawdata_paths = rawdata_paths[:num_models]
+    
+    if num_models == 0:
+        print("Error: No data files found.")
+        sys.exit(1)
+        
 
     datasets = []  
     optimizers = [] 
@@ -237,26 +233,30 @@ def main():
         datasets.append(dataset)
 
     print(f"Training {num_models} models......")
-    # with tqdm(total=num_models, desc='Training Models') as pbar:
-    #     for i in range(num_models):
-    #         train_model(i, models[i], optimizers[i],schedulers[i], datasets[i], hyperparams, device, parent_pbar=pbar,save_path=save_paths[i], verbose=True)
-    #         pbar.update(1)
-    
-    # print(f"Training completed!")
-    start_time = time.time()
-    processes = []
-    for i in range(num_models):
-        device_i = available_devices[i % len(available_devices)]  # Set device for each process
-        p = Process(target=train_process, args=(
-            models[i], optimizers[i], schedulers[i], datasets[i], hyperparams, device_i, save_paths[i]))
-        processes.append(p)
-        p.start()
+    if args.multi_gpu:
+        print(f"Using multi-GPU training.")
+        start_time = time.time()
+        processes = []
+        for i in range(num_models):
+            device_i = available_devices[i % len(available_devices)]  # Set device for each process
+            p = Process(target=train_process, args=(
+                models[i], optimizers[i], schedulers[i], datasets[i], hyperparams, device_i, save_paths[i]))
+            processes.append(p)
+            p.start()
 
-    for p in processes:
-        p.join()
+        for p in processes:
+            p.join()
+        
+        cost_time = time.time() - start_time
+        print(f"Training completed! Total time: {cost_time//60:.0f}m {cost_time%60:.0f}s")
+    else:
+        with tqdm(total=num_models, desc='Training Models') as pbar:
+            for i in range(num_models):
+                train_model(i, models[i], optimizers[i],schedulers[i], datasets[i], hyperparams, device, parent_pbar=pbar,save_path=save_paths[i], verbose=True)
+                pbar.update(1)
+        
+        print(f"Training completed!")
     
-    cost_time = time.time() - start_time
-    print(f"Training completed! Total time: {cost_time//60:.0f}m {cost_time%60:.0f}s")
 
 
 if __name__ == "__main__":

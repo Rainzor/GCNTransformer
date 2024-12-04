@@ -19,7 +19,7 @@ import json
 
 from models.model import vMFMixtureModel
 from models.loss import negative_log_likelihood
-from models.data_utils.utils import load_rawdata
+from models.data_utils.utils import load_rawdata, get_gridX
 
 
 def train_model(model_id, vmf, optimizer, scheduler,  dataset, hyperparams, device, parent_pbar=None, save_path=None, verbose=False):
@@ -139,8 +139,9 @@ def main():
     parser.add_argument('--sizes', type=str, default='64,64',
                         help='Sizes as a comma-separated list of integers. Example: "64,64"')
     parser.add_argument("--dtype", type=int, default="32",
-                        help="Data type of raw data")
-    parser.add_argument('--multi_gpu', action='store_false',)
+                        help="Data type of raw data. Default is 32 (float32).")
+    parser.add_argument('--multi_gpu', action='store_false',
+                        help='Whether using multi-GPU training.')
     args = parser.parse_args()
     if args.data_path=="" and args.base_path=="":
         print("Error: Either --data_path or --base_path must be specified.")

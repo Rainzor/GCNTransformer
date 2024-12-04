@@ -163,7 +163,8 @@ def main():
     dtype = np.float32 if args.dtype==32 else np.float16
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    available_devices = [torch.device(f'cuda:{i}') for i in range(torch.cuda.device_count())]
+    max_gpu = min(torch.cuda.device_count(), 4)
+    available_devices = [torch.device(f'cuda:{i}') for i in range(max_gpu)]
     print(f"Available devices number: {len(available_devices)}")
 
     sizes = [int(s) for s in args.sizes.split(',')]
@@ -207,7 +208,6 @@ def main():
         print("Error: No data files found.")
         sys.exit(1)
         
-
     X = get_gridX(sizes)
     print(f"Training {num_models} models......")
     if args.multi_gpu:
@@ -222,7 +222,6 @@ def main():
             models.append(vmf)
             optimizers.append(optimizer)
             
-        
         processes = []
         for i in range(num_models):
             device_i = available_devices[i % len(available_devices)]  # Set device for each process

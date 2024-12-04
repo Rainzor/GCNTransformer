@@ -140,7 +140,7 @@ def main():
                         help='Sizes as a comma-separated list of integers. Example: "64,64"')
     parser.add_argument("--dtype", type=int, default="32",
                         help="Data type of raw data. Default is 32 (float32).")
-    parser.add_argument('--multi_gpu', action='store_false',
+    parser.add_argument('--multi_gpu', action='store_true',
                         help='Whether using multi-GPU training.')
     args = parser.parse_args()
     if args.data_path=="" and args.base_path=="":

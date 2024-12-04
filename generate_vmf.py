@@ -218,8 +218,10 @@ def main():
         schedulers = []
         for i in range(num_models):
             device_i = available_devices[i % len(available_devices)]  # Set device for each process
-            models.append(vMFMixtureModel(num_components=num_components).to(device_i))
-            optimizers.append(torch.optim.Adam(vmf.parameters(), lr=learning_rate, weight_decay=weight_decay))
+            vmf = vMFMixtureModel(num_components=num_components).to(device_i)
+            optimizer = torch.optim.Adam(vmf.parameters(), lr=learning_rate, weight_decay=weight_decay)
+            models.append(vmf)
+            optimizers.append(optimizer)
             schedulers.append(torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.5))
         processes = []
         for i in range(num_models):

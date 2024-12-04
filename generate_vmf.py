@@ -122,6 +122,8 @@ def main():
                         help='Base path for data files. Example: datasets/')
     parser.add_argument('--data_path', type=str, default='',
                         help='Path to the data file. Example: datasets/raw_data/foam0/0')
+    parser.add_argument('--num_data', type=int, default=-1,
+                        help='Number of data files to process. Default is -1 (all).')
     parser.add_argument('--num_components', type=int, default=64,
                         help='Number of components in the vMF mixture model. Default is 64.')
     parser.add_argument('--num_epochs', type=int, default=10000,
@@ -204,12 +206,17 @@ def main():
         sys.exit(1)
 
     num_models = len(rawdata_paths)
+    
+    if args.num_data > 0:
+        num_models = min(args.num_data, num_models)
+        rawdata_paths = rawdata_paths[:num_models]
 
     datasets = []  
     optimizers = [] 
     models = []
     save_paths = []
     schedulers = []
+    X = get_gridX(sizes)
     print(f"Loading {num_models} datasets......")
     for i in range(num_models):
         device_i = available_devices[i % len(available_devices)]
@@ -220,11 +227,11 @@ def main():
         schedulers.append(torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.5))
 
         rp, sp = rawdata_paths[i]
-        raw_data, ray_data, X = load_rawdata(rp, sizes, verbose=False, dtype=dtype)
+        raw_data, ray_data = load_rawdata(rp, sizes, verbose=False, dtype=dtype)
         dataset = {
             "samples": raw_data,
             "target": ray_data.reshape(-1),
-            "w_data": X.clone(),
+            "w_data": X.clone()
         }
         save_paths.append(sp)
         datasets.append(dataset)

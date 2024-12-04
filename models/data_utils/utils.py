@@ -70,7 +70,7 @@ def sort_nodes_and_edges(pos_np: np.ndarray, edges_np: np.ndarray):
     return sorted_order
 
 
-def get_gridX(sizes, device):
+def get_gridX(sizes, device='cpu'):
     i_idx = torch.arange(sizes[0], dtype=torch.float, device=device) / sizes[0]
     j_idx = torch.arange(sizes[1], dtype=torch.float, device=device) / sizes[1]
     i_grid, j_grid = torch.meshgrid(i_idx, j_idx, indexing='ij')
@@ -84,7 +84,6 @@ def get_gridX(sizes, device):
 
 # Load raw data: ray position and ray direction
 def load_rawdata(filename, sizes, device='cpu', verbose=False, dtype=np.float32):
-    X = get_gridX(sizes, device)
 
     rawdata = np.fromfile(filename, dtype=dtype)
     
@@ -117,14 +116,12 @@ def load_rawdata(filename, sizes, device='cpu', verbose=False, dtype=np.float32)
     ray_data = ray_data / torch.sum(ray_data) / area
     
     raw_X = np.column_stack((x, y, z))
-    np.random.shuffle(raw_X)
     raw_num = min(8192, raw_X.shape[0])
-    raw_X = raw_X[:raw_num, :]
+    raw_X = raw_X[np.random.choice(raw_X.shape[0], raw_num, replace=False), :]
 
     raw_data = torch.tensor(raw_X, dtype=torch.float32, device=device)
     
     if verbose:
-        print("X Mesh shape:", X.shape)
         print("ray data shape:", ray_data.shape)
         print("raw data shape:", raw_data.shape)
-    return raw_data, ray_data, X
+    return raw_data, ray_data

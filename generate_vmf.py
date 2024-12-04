@@ -85,7 +85,7 @@ def train_model(model_id, vmf, optimizer, scheduler,  dataset, hyperparams, devi
     if save_path is not None:
         torch.save(vmf.state_dict(), save_path)
 
-def train_process(model, optimizer, scheduler, dataset, hyperparams, device, save_path):
+def train_process(model, optimizer, dataset, hyperparams, device, save_path):
     # 将模型、数据加载到指定设备
     model.to(device)
     dataset['samples'] = dataset['samples'].to(device)

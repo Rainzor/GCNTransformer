@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 from tqdm import tqdm
+import glob
+from torch.multiprocessing import Process
 
 
 import numpy as np
@@ -17,7 +19,7 @@ import json
 
 from models.model import vMFMixtureModel
 from models.loss import negative_log_likelihood
-from models.data_utils.dataset import load_rawdata
+from models.data_utils.utils import load_rawdata
 
 # Set the device if available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -28,7 +30,6 @@ def train_model(model_id, vmf, optimizer, scheduler,  dataset, hyperparams, devi
     l2_lambda = hyperparams['l2_lambda']
     num_epochs = hyperparams['num_epochs']
 
-    # 将数据移动到指定设备
     samples = dataset["samples"].to(device, non_blocking=True)
     target = dataset["target"].to(device, non_blocking=True)
     w_data = dataset["w_data"].to(device, non_blocking=True)
@@ -83,23 +84,27 @@ def train_model(model_id, vmf, optimizer, scheduler,  dataset, hyperparams, devi
         for epoch in range(num_epochs):
             update_model()
 
-    # 保存模型参数
     if save_path is not None:
         torch.save(vmf.state_dict(), save_path)
 
+def train_process(model, optimizer, scheduler, dataset, hyperparams, device, save_path):
+    # 将模型、数据加载到指定设备
+    model.to(device)
+    dataset['samples'] = dataset['samples'].to(device)
+    dataset['target'] = dataset['target'].to(device)
+    dataset['w_data'] = dataset['w_data'].to(device)
+    
+    # 开始训练
+    train_model(0, model, optimizer, scheduler, dataset, hyperparams, device, save_path=save_path)
 
-def getpath(subdir):
+
+def getpath(output_json_path):
     paths = []
-
-    if not os.path.isdir(subdir):
-        print(f"Error: The directory '{subdir}' does not exist.")
-        sys.exit(1)
-    output_json_path = os.path.join(subdir, "output.json")
     if os.path.isfile(output_json_path):
+        subdir = os.path.dirname(output_json_path)
         with open(output_json_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
             for entry in data:
-                # 获取 rawNonSpe 文件路径
                 rawShellDataPath = os.path.join(subdir, entry["rawShell"])
                 rawFirstDataPath = os.path.join(subdir, entry["rawFirst"])
                 vmfShellPath = os.path.join(subdir, entry["vmfShell"])
@@ -115,8 +120,6 @@ def main():
     parser = argparse.ArgumentParser(description='Script to train vMF mixture models.')
     parser.add_argument('--base_path', type=str, default='',
                         help='Base path for data files. Example: datasets/')
-    parser.add_argument('--num_files', type=int, default=1,
-                        help='Number of data files. Default is 1.')
     parser.add_argument('--data_path', type=str, default='',
                         help='Path to the data file. Example: datasets/raw_data/foam0/0')
     parser.add_argument('--num_components', type=int, default=64,
@@ -156,7 +159,6 @@ def main():
     # 初始化参数
     base_path = args.base_path
     data_path = args.data_path
-    num_files = args.num_files
     num_components = args.num_components
     num_epochs = args.num_epochs
     kl_lambda = args.kl_lambda
@@ -166,6 +168,9 @@ def main():
     weight_decay = args.weight_decay
     device = args.device
     dtype = np.float32 if args.dtype==32 else np.float16
+    
+    available_devices = [torch.device(f'cuda:{i}') for i in range(torch.cuda.device_count())]
+    print(f"Available devices number: {len(available_devices)}")
 
     sizes = [int(s) for s in args.sizes.split(',')]
 
@@ -180,32 +185,23 @@ def main():
     if data_path=="":
         if not os.path.isdir(base_path):
             print(f"Error: The base path '{base_path}' does not exist.")
-            sys.exit(1)
-        
-        json_file = os.path.join(base_path, "data.json")
-        if not os.path.isfile(json_file):
-            print(f"Warning: The file '{json_file}' does not exist.")
-            sys.exit(1)
-        
-        folder_num = 0
-        folder_name =""
-        rotatation = 0
-        with open(json_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            folder_name = data["name"]
-            folder_num = data["number"]
-            rotation = data["rotation"]
-        for i in range(folder_num):
-            for j in range(rotation):
-                subdir = os.path.join(base_path, folder_name+f"{i}", f"{j}")
-                rawdata_paths.extend(getpath(subdir))
+            sys.exit(1)        
+        pattern = os.path.join(base_path, "*", "*", "config.json")
+        json_files = glob.glob(pattern, recursive=True)
+        print(f"Found {len(json_files)} config.json files.")
+        for json_file in json_files:
+            rawdata_paths.extend(getpath(json_file))
 
 
-    else:
+    elif base_path=="":
         if not os.path.isdir(data_path):
             print(f"Error: The data path '{data_path}' does not exist.")
             sys.exit(1)
-        rawdata_paths.extend(getpath(data_path))
+        json_file = os.path.join(data_path, "config.json")
+        rawdata_paths.extend(getpath(json_file))
+    else:
+        print("Error: Either --data_path or --base_path must be specified.")
+        sys.exit(1)
 
     num_models = len(rawdata_paths)
 
@@ -214,30 +210,47 @@ def main():
     models = []
     save_paths = []
     schedulers = []
+    print(f"Loading {num_models} datasets......")
     for i in range(num_models):
-        vmf = vMFMixtureModel(num_components=num_components).to(device)
+        device_i = available_devices[i % len(available_devices)]
+        vmf = vMFMixtureModel(num_components=num_components).to(device_i)
         optimizer = torch.optim.Adam(vmf.parameters(), lr=learning_rate, weight_decay=weight_decay)
         models.append(vmf)
         optimizers.append(optimizer)
         schedulers.append(torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.5))
-        # 加载对应的数据集
+
         rp, sp = rawdata_paths[i]
-        raw_data, ray_data, X = load_rawdata(rp, sizes, device, verbose=False, dtype=dtype)
+        raw_data, ray_data, X = load_rawdata(rp, sizes, verbose=False, dtype=dtype)
         dataset = {
-            "samples": raw_data.clone().detach(),
-            "target": ray_data.reshape(-1).to(device),
-            "w_data": X.clone().detach(),
+            "samples": raw_data,
+            "target": ray_data.reshape(-1),
+            "w_data": X.clone(),
         }
         save_paths.append(sp)
         datasets.append(dataset)
 
     print(f"Training {num_models} models......")
-    with tqdm(total=num_models, desc='Training Models') as pbar:
-        for i in range(num_models):
-            train_model(i, models[i], optimizers[i],schedulers[i], datasets[i], hyperparams, device, parent_pbar=pbar,save_path=save_paths[i], verbose=True)
-            pbar.update(1)
+    # with tqdm(total=num_models, desc='Training Models') as pbar:
+    #     for i in range(num_models):
+    #         train_model(i, models[i], optimizers[i],schedulers[i], datasets[i], hyperparams, device, parent_pbar=pbar,save_path=save_paths[i], verbose=True)
+    #         pbar.update(1)
     
-    print(f"Training completed!")
+    # print(f"Training completed!")
+    start_time = time.time()
+    processes = []
+    for i in range(num_models):
+        device_i = available_devices[i % len(available_devices)]  # Set device for each process
+        p = Process(target=train_process, args=(
+            models[i], optimizers[i], schedulers[i], datasets[i], hyperparams, device_i, save_paths[i]))
+        processes.append(p)
+        p.start()
+
+    for p in processes:
+        p.join()
+    
+    cost_time = time.time() - start_time
+    print(f"Training completed! Total time: {cost_time//60:.0f}m {cost_time%60:.0f}s")
+
 
 if __name__ == "__main__":
     main()

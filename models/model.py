@@ -80,10 +80,10 @@ class TransformerEncoder(nn.Module):
 class GraphTransformer(nn.Module):
     def __init__(
         self,
-        num_features: int,
+        nfeat_node:int, nfeat_edge:int,
         gnn_dim: int,
         gnn_layers: int,
-        transformer_width: int,
+        transformer_dim: int,
         transformer_layers: int,
         transformer_heads: int,
         hidden_dim: int,
@@ -97,7 +97,7 @@ class GraphTransformer(nn.Module):
     ):
         super(GraphTransformer, self).__init__()
         assert pool in ['cls', 'mean'], "pool must be either 'cls' or 'mean'"
-        self.num_features = num_features
+        self.nfeat_node = nfeat_node
         self.output_dim = output_dim
         self.pool = pool
         self.patch_rw_dim = patch_rw_dim
@@ -105,7 +105,8 @@ class GraphTransformer(nn.Module):
 
         # Positional Encoder
         self.positional_encoder = PositionalEncoder(L=embedding_dim)
-        self.proj_to_gnn = nn.Linear(num_features + embedding_dim*pos_dim, gnn_dim)
+        self.node_encoder = nn.Linear(nfeat_node + embedding_dim*pos_dim, gnn_dim)
+        self.edge_encoder = nn.Linear(nfeat_edge, gnn_dim)
         # GCN module
         self.gnn = nn.ModuleList([
                     GNN(nin=gnn_dim, nout=gnn_dim, nlayer_gnn=1, gnn_type=gnn_type, bn=False, dropout=dropout)
@@ -114,26 +115,26 @@ class GraphTransformer(nn.Module):
         self.U = nn.ModuleList(
             [MLP(gnn_dim, gnn_dim, num_layers=1, with_final_activation=True, batch_norm=True) for _ in range(gnn_layers-1)])
 
-        self.proj_to_transformer = nn.Linear(gnn_dim, transformer_width) if gnn_dim != transformer_width else nn.Identity()
+        self.proj_to_transformer = nn.Linear(gnn_dim, transformer_dim) if gnn_dim != transformer_dim else nn.Identity()
 
-        self.subgraph_pos_enc = nn.Linear(pos_dim * embedding_dim, transformer_width)
+        self.subgraph_pos_enc = nn.Linear(pos_dim * embedding_dim, transformer_dim)
         if self.patch_rw_dim > 0:
-            self.patch_rw_encoder = nn.Linear(patch_rw_dim, transformer_width)
+            self.patch_rw_encoder = nn.Linear(patch_rw_dim, transformer_dim)
 
         # [CLS] token as a learnable embedding
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, transformer_width))
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, transformer_dim))
 
         # If positional encoding increases the dimension, adjust the transformer width accordingly
         self.transformer = TransformerEncoder(
-                            d_model=transformer_width,
+                            d_model=transformer_dim,
                             n_head=transformer_heads,
                             num_layers=transformer_layers,
-                            dim_feedforward=transformer_width*2
+                            dim_feedforward=transformer_dim*2
                             # dropout=dropout
                         )
 
       # Decoder with Batch Normalization
-        self.decoder = MLP(transformer_width, hidden_dim, output_dim, num_layers=3, activation=GELU(), batch_norm=False, with_final_activation=False)
+        self.decoder = MLP(transformer_dim, hidden_dim, output_dim, num_layers=3, activation=GELU(), batch_norm=True, with_final_activation=False)
 
         # Initialize weights
         self._init_weights()
@@ -152,16 +153,22 @@ class GraphTransformer(nn.Module):
         """
         B, P = data.mask.size()
         x = data.x
+        edge_attr = data.edge_attr
         edge_index = data.combined_subgraphs
         batch_x = data.subgraphs_batch        
         pos = data.pos
 
         pos_enc = self.positional_encoder(pos)  # [total_num_nodes, embedding_dim * pos_dim]
 
-        x = torch.cat([x, pos_enc], dim=-1)  # [total_num_nodes, num_features + embedding_dim * pos_dim]
+        x = torch.cat([x, pos_enc], dim=-1)  # [total_num_nodes, nfeat_node + embedding_dim * pos_dim]
         # Extract node features using GCN
-        x = self.proj_to_gnn(x)  # [total_num_nodes, gnn_dim]
+        x = self.node_encoder(x)  # [total_num_nodes, gnn_dim]
+        edge_attr = self.edge_encoder(edge_attr)
         x = x[data.subgraphs_nodes_mapper]  # [combined_num_nodes, gnn_dim]
+        if edge_attr is None:
+            edge_attr = data.edge_index.new_zeros(data.edge_index.size(-1))
+        e = edge_attr[data.subgraphs_edges_mapper]  # [combined_num_edges, gnn_dim]
+
         for i in range(self.gnn_layers):
             if i > 0:
                 # scatter the node features to the subgraphs
@@ -173,24 +180,24 @@ class GraphTransformer(nn.Module):
                 x = scatter(x, data.subgraphs_nodes_mapper,
                             dim=0, reduce='mean')[data.subgraphs_nodes_mapper]
                 
-            x = self.gnn[i](x, edge_index)
+            x = self.gnn[i](x, edge_index,e)  # [combined_num_nodes, gnn_dim]
         
         subgraph_x = scatter(x, batch_x, dim=0, reduce='mean',dim_size= B*P)  # [B*P, gnn_dim]
 
         # Project to Transformer input dimension
-        subgraph_x = self.proj_to_transformer(subgraph_x)  # [B*P, transformer_width]
+        subgraph_x = self.proj_to_transformer(subgraph_x)  # [B*P, transformer_dim]
         sub_pos_enc = self.positional_encoder(data.patch_pos)  # [B*P, embedding_dim * pos_dim]
-        subgraph_x += self.subgraph_pos_enc(sub_pos_enc)  # [B*P, transformer_width]
+        subgraph_x += self.subgraph_pos_enc(sub_pos_enc)  # [B*P, transformer_dim]
         if self.patch_rw_dim > 0:
-            subgraph_x += self.patch_rw_encoder(data.patch_pe)  # [B*P, transformer_width]
+            subgraph_x += self.patch_rw_encoder(data.patch_pe)  # [B*P, transformer_dim]
 
         # Reshape to patches
-        trans_x = subgraph_x.view(B, P, -1)  # [batch_size, num_patches, transformer_width]
+        trans_x = subgraph_x.view(B, P, -1)  # [batch_size, num_patches, transformer_dim]
         trans_mask = data.mask  # [batch_size, num_patches]
         
 
         # Extract the graph's features
-        graph_features = self._readout(trans_x, trans_mask, pool=self.pool)  # [batch_size, transformer_width]
+        graph_features = self._readout(trans_x, trans_mask, pool=self.pool)  # [batch_size, transformer_dim]
 
         # Pass through the decoder
         out = self.decoder(graph_features)  # [batch_size, output_dim]
@@ -198,12 +205,12 @@ class GraphTransformer(nn.Module):
         return out  # [batch_size, output_dim]
     
     def _readout(self, x, mask, pool='cls'):
-        # x: [batch_size, num_patchs, transformer_width]; 
+        # x: [batch_size, num_patchs, transformer_dim]; 
         # mask: [batch_size, num_patchs, 1]
         B, P, _ = x.size()
 
         # Add [CLS] token
-        cls_tokens = self.cls_token.expand(B, -1, -1)  # [batch_size, 1, transformer_width]
+        cls_tokens = self.cls_token.expand(B, -1, -1)  # [batch_size, 1, transformer_dim]
 
         x = torch.cat([cls_tokens, x], dim=1) if pool == 'cls' else x
 
@@ -212,7 +219,7 @@ class GraphTransformer(nn.Module):
         key_padding_mask = torch.cat([cls_mask, mask], dim=1) if pool == 'cls' else mask
 
         # Permute to match Transformer input shape (sequence_length, batch_size, embedding_dim)
-        x = x.permute(1, 0, 2)  # [1 + num_patchs, batch_size, transformer_width]
+        x = x.permute(1, 0, 2)  # [1 + num_patchs, batch_size, transformer_dim]
 
         # Initialize the attention mask with causal masking
         if pool == 'cls':
@@ -225,31 +232,32 @@ class GraphTransformer(nn.Module):
         x_transformed = self.transformer(x, 
                                         attn_mask= attn_mask,
                                         key_padding_mask=~key_padding_mask)  
-                                        # [1 + num_patchs, batch_size, transformer_width]
+                                        # [1 + num_patchs, batch_size, transformer_dim]
 
         # Permute back to (batch_size, sequence_length, embedding_dim)
-        x_transformed = x_transformed.permute(1, 0, 2)  # [batch_size, 1 + num_patchs, transformer_width]
+        x_transformed = x_transformed.permute(1, 0, 2)  # [batch_size, 1 + num_patchs, transformer_dim]
 
         if pool == 'cls':
             # Extract the [CLS] token's features
             cls_features = x_transformed[:, 0, :]
         elif pool == 'mean':
             mask_unsqueeze = key_padding_mask.unsqueeze(-1).type_as(x_transformed)  # [batch_size, 1 + num_patchs, 1]
-            sum_x = (x_dense * mask_unsqueeze).sum(dim=1)  # [batch_size, transformer_width]
+            sum_x = (x_dense * mask_unsqueeze).sum(dim=1)  # [batch_size, transformer_dim]
             num_nodes = mask_unsqueeze.sum(dim=1)
             cls_features = sum_x / num_nodes.clamp(min=1)
 
 
-        return cls_features  # [batch_size, transformer_width]
+        return cls_features  # [batch_size, transformer_dim]
 
-    def vmf_param(self, data):
+    def vmf_param(self, data, is_diff=False):
         """
         Computes the von Mises-Fisher (vMF) parameters from the model output.
         """
         with torch.no_grad():
             # Forward pass through the model
             out = self(data)  # [batch_size, output_dim]
-            
+            if is_diff and hasattr(data, 'y_first'):
+                out = out + data.y_first
             # Batch size
             batch_size = out.size(0)  # [batch_size]
             output_dim = out.size(1)  # output_dim = num_vmf * 4

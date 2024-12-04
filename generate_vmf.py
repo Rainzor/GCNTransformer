@@ -221,7 +221,7 @@ def main():
             optimizer = torch.optim.Adam(vmf.parameters(), lr=learning_rate, weight_decay=weight_decay)
             models.append(vmf)
             optimizers.append(optimizer)
-            
+        max_processes = max_gpu
         processes = []
         for i in range(num_models):
             device_i = available_devices[i % len(available_devices)]  # Set device for each process
@@ -238,6 +238,10 @@ def main():
                 models[i], optimizers[i], dataset, hyperparams, device_i, sp))
             processes.append(p)
             p.start()
+            if len(processes) >= max_processes:
+                for p in processes:
+                    p.join()  # 等待当前批次进程完成
+                processes = []  # 清空已完成的进程列表
 
         for p in processes:
             p.join()

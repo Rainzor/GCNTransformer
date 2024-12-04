@@ -4,7 +4,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 from tqdm import tqdm
 import glob
-from torch.multiprocessing import Process
+import torch.multiprocessing as mp
 
 
 import numpy as np
@@ -208,31 +208,7 @@ def main():
         sys.exit(1)
         
 
-    datasets = []  
-    optimizers = [] 
-    models = []
-    save_paths = []
-    schedulers = []
     X = get_gridX(sizes)
-    print(f"Loading {num_models} datasets......")
-    for i in range(num_models):
-        device_i = available_devices[i % len(available_devices)]
-        vmf = vMFMixtureModel(num_components=num_components).to(device_i)
-        optimizer = torch.optim.Adam(vmf.parameters(), lr=learning_rate, weight_decay=weight_decay)
-        models.append(vmf)
-        optimizers.append(optimizer)
-        schedulers.append(torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.5))
-
-        rp, sp = rawdata_paths[i]
-        raw_data, ray_data = load_rawdata(rp, sizes, verbose=False, dtype=dtype)
-        dataset = {
-            "samples": raw_data,
-            "target": ray_data.reshape(-1),
-            "w_data": X.clone()
-        }
-        save_paths.append(sp)
-        datasets.append(dataset)
-
     print(f"Training {num_models} models......")
     if args.multi_gpu:
         print(f"Using multi-GPU training.")
@@ -240,8 +216,19 @@ def main():
         processes = []
         for i in range(num_models):
             device_i = available_devices[i % len(available_devices)]  # Set device for each process
-            p = Process(target=train_process, args=(
-                models[i], optimizers[i], schedulers[i], datasets[i], hyperparams, device_i, save_paths[i]))
+            vmf = vMFMixtureModel(num_components=num_components).to(device_i)
+            optimizer = torch.optim.Adam(vmf.parameters(), lr=learning_rate, weight_decay=weight_decay)
+            scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.5)
+            rp, sp = rawdata_paths[i]
+            raw_data, ray_data = load_rawdata(rp, sizes, verbose=False, dtype=dtype)
+            dataset = {
+                "samples": raw_data.to(device_i),
+                "target": ray_data.reshape(-1).to(device_i),
+                "w_data": X.clone().to(device_i)
+            }
+            
+            p = mp.Process(target=train_process, args=(
+                vmf, optimizer, scheduler, dataset, hyperparams, device_i, sp))
             processes.append(p)
             p.start()
 
@@ -251,9 +238,34 @@ def main():
         cost_time = time.time() - start_time
         print(f"Training completed! Total time: {cost_time//60:.0f}m {cost_time%60:.0f}s")
     else:
+        save_paths = []
+        datasets = []
+        optimizers = [] 
+        models = []
+        schedulers = []   
+        print(f"Loading {num_models} datasets......")     
+        for i in range(num_models):
+            # Create model, optimizer, scheduler
+            vmf = vMFMixtureModel(num_components=num_components).to(device)
+            optimizer = torch.optim.Adam(vmf.parameters(), lr=learning_rate, weight_decay=weight_decay)
+            models.append(vmf)
+            optimizers.append(optimizer)
+            schedulers.append(torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.5))
+            
+            # Load raw data
+            rp, sp = rawdata_paths[i]
+            raw_data, ray_data = load_rawdata(rp, sizes, verbose=False, dtype=dtype)
+            dataset = {
+                "samples": raw_data.to(device),
+                "target": ray_data.reshape(-1).to(device),
+                "w_data": X.clone().to(device)
+            }
+            datasets.append(dataset)
+            save_paths.append(sp)
+
         with tqdm(total=num_models, desc='Training Models') as pbar:
             for i in range(num_models):
-                train_model(i, models[i], optimizers[i],schedulers[i], datasets[i], hyperparams, device, parent_pbar=pbar,save_path=save_paths[i], verbose=True)
+                train_model(i, models[i], optimizers[i], schedulers[i], datasets[i], hyperparams, device, parent_pbar=pbar, save_path=save_paths[i], verbose=True)
                 pbar.update(1)
         
         print(f"Training completed!")
@@ -261,5 +273,6 @@ def main():
 
 
 if __name__ == "__main__":
+    mp.set_start_method('spawn')  # 确保使用 'spawn' 启动方式
     main()
 

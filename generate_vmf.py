@@ -143,7 +143,7 @@ def main():
                         help='Weight for L1 regularization. Default is 10.')
     parser.add_argument('--l2', type=float, default=0.5,
                         help='Weight for L2 regularization. Default is 0.5.')
-    parser.add_argument('--learning_rate', type=float, default=5e-2,
+    parser.add_argument('--lr', type=float, default=5e-2,
                         help='Learning rate. Default is 5e-2.')
     parser.add_argument('--weight_decay', type=float, default=1e-5,
                         help='Weight decay (for Adam optimizer). Default is 1e-5.')
@@ -176,7 +176,7 @@ def main():
     l1_lambda = args.l1
     l2_lambda = args.l2
     print(f"kl_lambda: {kl_lambda}, l1_lambda: {l1_lambda}, l2_lambda: {l2_lambda}")
-    learning_rate = args.learning_rate
+    learning_rate = args.lr
     weight_decay = args.weight_decay
     dtype = np.float32 if args.dtype==32 else np.float16
     
@@ -288,10 +288,6 @@ def main():
         optimizers = [] 
         models = []
         schedulers = []   
-
-        vmf_datasets = VMFDataset(rawdata_paths, sizes, dtype,samples=100000, force_reload=True)
-        datasets_loader = torch.utils.data.DataLoader(vmf_datasets, batch_size=batch_size, shuffle=False)
-        model_num = len(datasets_loader)
 
         print(f"Training {model_num} models......")
         with tqdm(total=model_num, desc='Training Models') as pbar:

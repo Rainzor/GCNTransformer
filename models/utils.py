@@ -31,7 +31,7 @@ def multi_vmf(weights, axes, kappas, w):
 
 
     # Ensure kappas are non-negative for stability
-    kappas = torch.clamp(kappas, min=1e-10, max=1e5) # Shape: (bz, num_spheres, 1)
+    # kappas = torch.clamp(kappas, min=1e-10, max=1e5) # Shape: (bz, num_spheres, 1)
 
     # Define thresholds for approximations
     large_kappa_threshold = 1e5  # Threshold for considering kappa as "large"
@@ -53,7 +53,7 @@ def multi_vmf(weights, axes, kappas, w):
     # Compute the weighted von Mises-Fisher pdf values
     weighted_exps = weights * norm_const * torch.exp(kappas * dot_products)  # Shape: (bz, num_spheres, data_sizes)
     q = torch.sum(weighted_exps, dim=1)  # Shape: (bz, data_sizes)
-    q = torch.clamp(q, min=1e-10, max=1e10)  # Further clamping to avoid extreme values
+    # q = torch.clamp(q, min=1e-10, max=1e10)  # Further clamping to avoid extreme values
     return q # Shape: (bz, data_sizes) or (data_sizes) if bz=1
 
 def plot_outputs_3d(references, predictions, sizes, save_path=None, return_fig=False):

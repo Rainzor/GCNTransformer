@@ -95,13 +95,13 @@ def train_model(model_id, vmf, optimizer, scheduler,  dataset, hyperparams, devi
 
 
 def train_process(model, optimizer, dataset, hyperparams, device):
-    # 将模型、数据加载到指定设备
+    # Load the model and dataset
     model.to(device)
     dataset['samples'] = dataset['samples'].to(device) # Shape: (bz, data_sizes, 3)
     dataset['target'] = dataset['target'].to(device) # Shape: (bz, data_sizes)
     dataset['w_data'] = dataset['w_data'].to(device) # Shape: (bz, data_sizes, 3)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.5)
-    # 开始训练
+    # Start training
     train_model(0, model, optimizer, scheduler, dataset, hyperparams, device)
 
 

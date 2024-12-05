@@ -51,7 +51,7 @@ def train_model(model_id, vmf, optimizer, scheduler,  dataset, hyperparams, devi
     best_loss = float('inf')
     patience_counter = 0
     early_stopping_patience = 1000
-    min_delta = 0.0001
+    min_delta = 0.0002
     if verbose:
         loss_history = []
         with tqdm(total=epochs, desc=f'Model {model_id} Training', leave=False) as pbar:

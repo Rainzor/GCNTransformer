@@ -235,7 +235,11 @@ def main():
     vmf_datasets = VMFDataset(rawdata_paths, sizes, dtype,samples=100000, force_reload=args.force_reload)
     datasets_loader = torch.utils.data.DataLoader(vmf_datasets,batch_size=batch_size, shuffle=False)
     model_num = len(datasets_loader)
-
+    batch_size_list = np.ones(model_num, dtype=int) * batch_size
+    if total_num % model_num != 0:
+        batch_size_list[-1] = total_num % model_num
+    
+    assert sum(batch_size_list) == total_num, "Batch size mismatch!"
     # Train the models
     if args.multi_gpu:
         print(f"Using multi-GPU training.")
@@ -245,7 +249,7 @@ def main():
         optimizers = []
         schedulers = []
         for i in range(model_num):
-            local_bz = len(dataset[i]['save_path'])
+            local_bz = batch_size_list[i]
             device_i = available_devices[i % len(available_devices)]  # Set device for each process
             vmf = vMFMixtureModel(components_num=components_num,
                                 batch_size=local_bz
@@ -289,7 +293,7 @@ def main():
         with tqdm(total=model_num, desc='Training Models') as pbar:
             for i, dataset in enumerate(datasets_loader):
                 # Create a new model for each dataset
-                local_bz = len(dataset['save_path'])
+                local_bz = batch_size_list[i]
                 model = vMFMixtureModel(components_num=components_num, batch_size=local_bz).to(device)
                 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate*math.sqrt(local_bz), weight_decay=weight_decay)
                 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.5)

@@ -43,7 +43,7 @@ def train_model(model_id, vmf, optimizer, scheduler,  dataset, hyperparams, devi
         )
         loss.backward()
         optimizer.step()
-        if loss.item() < 3:
+        if loss.item() < 4.0:
             scheduler.step()
         return loss, loss_dict
 

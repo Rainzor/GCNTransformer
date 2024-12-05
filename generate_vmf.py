@@ -239,7 +239,7 @@ def main():
     if total_num % model_num != 0:
         batch_size_list[-1] = total_num % model_num
     
-    assert sum(batch_size_list) == total_num, "Batch size mismatch!"
+    assert sum(batch_size_list) == total_num, f"Batch size mismatch, total_num: {total_num}, batch_size_list: {batch_size_list}"
     # Train the models
     if args.multi_gpu:
         print(f"Using multi-GPU training.")

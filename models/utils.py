@@ -45,7 +45,7 @@ def multi_vmf(weights, axes, kappas, w):
     #     kappas / (2 * math.pi),  # Approximation for large kappa
     #     kappas / (2 * math.pi * (1-torch.exp(-2*kappas)))
     # ) # Shape: (bz, num_spheres, 1)
-    # norm_const = kappas / (4 * math.pi * (1-torch.exp(-2*kappas)))
+    norm_const = kappas / (2 * math.pi * (1-torch.exp(-2*kappas)))
 
     # Compute dot products between input w and the axes of the spheres (unit vectors)
     dot_products = torch.bmm(axes, w.permute(0, 2, 1))-1  # Shape: (bz, num_spheres, data_sizes)

@@ -236,8 +236,8 @@ def main():
     datasets_loader = torch.utils.data.DataLoader(vmf_datasets,batch_size=batch_size, shuffle=False)
     model_num = len(datasets_loader)
     batch_size_list = np.ones(model_num, dtype=int) * batch_size
-    if total_num % model_num != 0:
-        batch_size_list[-1] = total_num % model_num
+    if total_num % batch_size != 0:
+        batch_size_list[-1] = total_num % batch_size
     
     assert sum(batch_size_list) == total_num, f"Batch size mismatch, total_num: {total_num}, batch_size_list: {batch_size_list}"
     # Train the models

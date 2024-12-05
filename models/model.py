@@ -291,13 +291,13 @@ class vMFMixtureModel(nn.Module):
         super(vMFMixtureModel, self).__init__()
         self.components_num = components_num
         self.batch_size = batch_size
-        # 混合系数的对数几率
+        # logit weights
         self.w_logits = nn.Parameter(torch.randn(batch_size, components_num))
 
-        # 角度参数 theta 和 phi
+        # location parameters
         self.theta_phi = nn.Parameter(torch.randn(batch_size, 2 * components_num)*3)
 
-        # 浓度参数的对数
+        # concentration parameters
         self.log_kappa = nn.Parameter(torch.randn(batch_size, components_num))
 
     def forward(self):

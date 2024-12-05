@@ -8,7 +8,7 @@ import json
 from torch_geometric.data import InMemoryDataset, Data
 from torch_geometric.data import DataLoader
 from collections import deque, defaultdict
-from models.data_utils.utils import sort_nodes_and_edges_bfs, sort_nodes_and_edges, load_rawdata, get_gridX
+from models.data_utils.utils import sort_nodes_and_edges_bfs, sort_nodes_and_edges, get_gridX
 from torch.utils.data import Dataset
 
 class FoamDataset(InMemoryDataset):
@@ -173,21 +173,75 @@ class VMFDataset(Dataset):
         self.samples = samples
         self.force_reload = force_reload
 
-
     def __len__(self):
         return len(self.rawdata_paths)
 
     def __getitem__(self, idx):
         rp, sp = self.rawdata_paths[idx]
-        raw_data, ray_data = load_rawdata(rp, self.sizes,
-                                    samples=self.samples,
-                                    device=self.device, 
-                                    verbose=False, dtype=self.dtype, 
-                                    force_reload=self.force_reload)
+        raw_data, ray_data = VMFDataset.read_rawdata(rp, self.sizes,
+                                                      samples=self.samples,
+                                                      device=self.device, 
+                                                      verbose=False, dtype=self.dtype, 
+                                                      force_reload=self.force_reload)
         
         return {
-            "samples": raw_data,
-            "target": ray_data.reshape(-1),
-            "w_data": get_gridX(self.sizes),
+            # "samples": raw_data.to(self.device, dtype=self.dtype),
+            "samples": raw_data.to(self.device, dtype=torch.float32),
+            "target": ray_data.reshape(-1).to(self.device, dtype=torch.float32),
+            "w_data": get_gridX(self.sizes, dtype=self.dtype, device=self.device),
             "save_path": sp
         }
+
+    @staticmethod
+    def read_rawdata(filename, sizes, samples=8192, dtype=torch.float32, force_reload=False, verbose=False, device='cpu'):
+        dirname = os.path.dirname(filename)
+        base_filename = os.path.splitext(os.path.basename(filename))[0]
+        save_path = os.path.join(dirname, f"{base_filename}.pth")
+
+        if os.path.exists(save_path) and not force_reload:
+            if verbose:
+                print(f"Loading cached data from {save_path}...")
+            cached_data = torch.load(save_path, map_location=device, weights_only=True)
+            rawdata_tensor = cached_data["raw"]
+            raydata_tensor = cached_data["ray"]
+            if verbose:
+                print("ray data shape:", raydata_tensor.shape)
+                print("raw data shape:", rawdata_tensor.shape)
+            return rawdata_tensor, raydata_tensor
+
+        np_dtype = np.float16 if dtype == torch.float16 else np.float32
+        rawdata_np = np.fromfile(filename, dtype=np_dtype)
+
+        rawdata_np = rawdata_np.reshape(-1, 4)
+        x = rawdata_np[:, 0]
+        phi = rawdata_np[:, 1] - np.pi
+        r = np.sqrt(1 - x*x)
+        y = r * np.cos(phi)
+        z = r * np.sin(phi)
+
+        # Create histogram edges
+        x_edges = np.linspace(-1, 1, sizes[0] + 1, dtype=np_dtype)
+        phi_edges = np.linspace(-np.pi, np.pi, sizes[1] + 1, dtype=np_dtype)
+
+        # Statistics of ray data
+        H, _, _ = np.histogram2d(x, phi, bins=[x_edges, phi_edges])
+        raydata_tensor = torch.tensor(H, dtype=torch.float32, device=device).reshape(-1, 1)
+        if raydata_tensor.shape[0] != sizes[0] * sizes[1]:
+            print("Error: ray data shape mismatch!")
+            sys.exit(1)
+        area = 4 * math.pi / raydata_tensor.shape[0]
+        raydata_tensor = raydata_tensor / torch.sum(raydata_tensor) / area
+        
+        raw_X = np.stack((x, y, z), axis=1)
+        raw_X = np.random.permutation(raw_X)
+        raw_num = min(samples, raw_X.shape[0])
+        raw_X = raw_X[:raw_num, :]
+        rawdata_tensor = torch.tensor(raw_X, dtype=dtype, device=device)
+        
+        if verbose:
+            print("ray data shape:", raydata_tensor.shape)
+            print("raw data shape:", rawdata_tensor.shape)
+
+        torch.save({"raw": rawdata_tensor, "ray": raydata_tensor}, save_path)
+
+        return rawdata_tensor, raydata_tensor

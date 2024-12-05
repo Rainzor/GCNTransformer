@@ -23,7 +23,7 @@ def multi_vmf(weights, axes, kappas, w):
     - weights (torch.Tensor): Weights of the von Mises-Fisher distributions. Shape: (bz, num_spheres, 1)
     - axes (torch.Tensor): Axes of the von Mises-Fisher distributions. Shape: (bz, num_spheres, 3)
     - kappas (torch.Tensor): Concentration parameters of the von Mises-Fisher distributions. Shape: (bz, num_spheres, 1)
-    - w (torch.Tensor): Input data. Shape: (bz, data_sizes, 3)
+    - w (torch.Tensor): Input data. Shape: (bz, data_sizes, 3), dtype: torch.float32 or torch.float16
 
     Returns:
     - torch.Tensor: Probability density function values. Shape: (bz, data_sizes) or (data_sizes) if bz=1

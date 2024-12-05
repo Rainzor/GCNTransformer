@@ -1,48 +1,61 @@
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import torch.nn.functional as F
-from tqdm import tqdm
-import glob
-import torch.multiprocessing as mp
-
-
-import numpy as np
-
 import threading
 import os
+import glob
 import sys
 import time
 import argparse
 import math
 import json
 
+import numpy as np
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+import torch.multiprocessing as mp
+from torch.amp import autocast, GradScaler
+from tqdm import tqdm
+
 from models.model import vMFMixtureModel
 from models.loss import negative_log_likelihood
-from models.data_utils.utils import load_rawdata, get_gridX
 from models.data_utils.dataset import VMFDataset
 
-def train_model(model_id, vmf, optimizer, scheduler,  dataset, hyperparams, device, parent_pbar=None, verbose=False):
+def train_model(model_id, vmf, optimizer, scheduler, dataset, hyperparams, device, parent_pbar=None, verbose=False):
     kl_lambda = hyperparams['kl_lambda']
     l1_lambda = hyperparams['l1_lambda']
     l2_lambda = hyperparams['l2_lambda']
     epochs = hyperparams['epochs']
 
-    samples = dataset["samples"].to(device, non_blocking=True) # Shape: (bz, data_sizes, 3)
-    target = dataset["target"].to(device, non_blocking=True) # Shape: (bz, sizes)
-    w_data = dataset["w_data"].to(device, non_blocking=True) # Shape: (bz, sizes, 3)
-    save_path = dataset.get("save_path", None) # Save path for the trained model
+    # Load data and move it to the device
+    samples = dataset["samples"].to(device, non_blocking=True)  # Shape: (bz, data_sizes, 3)
+    target = dataset["target"].to(device, non_blocking=True)    # Shape: (bz, sizes)
+    w_data = dataset["w_data"].to(device, non_blocking=True)    # Shape: (bz, sizes, 3)
+    save_path = dataset.get("save_path", None)  # Save path for the trained model
+
+    # Initialize GradScaler for mixed precision training
+    scaler = GradScaler()
 
     def update_model():
         optimizer.zero_grad()
-        pi, mu, kappa = vmf()
-        loss, loss_dict = negative_log_likelihood(
-            samples, pi, mu, kappa,
-            kl_lambda=kl_lambda, l1_lambda=l1_lambda, l2_lambda=l2_lambda,
-            p=target, w=w_data
-        )
-        loss.backward()
-        optimizer.step()
+
+        # Use autocast for mixed precision during the forward pass
+        with autocast('cuda'):  # Corrected to 'cuda'
+            pi, mu, kappa = vmf()
+            loss, loss_dict = negative_log_likelihood(
+                samples, pi, mu, kappa,
+                kl_lambda=kl_lambda, l1_lambda=l1_lambda, l2_lambda=l2_lambda,
+                p=target, w=w_data
+            )
+
+        # Scale the loss and compute gradients in float32
+        scaler.scale(loss).backward()
+
+        # Step the optimizer with gradient scaling
+        scaler.step(optimizer)
+        scaler.update()
+
+        # Update scheduler if loss is below a threshold
         if loss.item() < 4.0:
             scheduler.step()
         return loss, loss_dict
@@ -52,6 +65,8 @@ def train_model(model_id, vmf, optimizer, scheduler,  dataset, hyperparams, devi
     patience_counter = 0
     early_stopping_patience = 1000
     min_delta = 0.0002
+
+    # Training loop with tqdm progress bar if verbose
     if verbose:
         loss_history = []
         with tqdm(total=epochs, desc=f'Model {model_id} Training', leave=False) as pbar:
@@ -65,6 +80,8 @@ def train_model(model_id, vmf, optimizer, scheduler,  dataset, hyperparams, devi
                     'L2': f'{loss_dict["L2"].item():.4f}'
                 })
                 pbar.update(1)
+
+                # Early stopping logic based on improvement in loss
                 if loss.item() < best_loss - min_delta:
                     best_loss = loss.item()
                     patience_counter = 0
@@ -76,14 +93,15 @@ def train_model(model_id, vmf, optimizer, scheduler,  dataset, hyperparams, devi
 
             if parent_pbar is not None:
                 parent_pbar.set_postfix({
-                        'ID': f'{model_id}',
-                        'Loss': f'{loss.item():.4f}',
-                        'step': f'{epoch}'
+                    'ID': f'{model_id}',
+                    'Loss': f'{loss.item():.4f}',
+                    'step': f'{epoch}'
                 })
     else:
         for epoch in range(epochs):
             loss, loss_dict = update_model()
 
+    # Save model parameters if save path is provided
     if save_path is not None:
         for i, sp in enumerate(save_path):
             state_dict = {
@@ -180,7 +198,7 @@ def main():
     print(f"kl_lambda: {kl_lambda}, l1_lambda: {l1_lambda}, l2_lambda: {l2_lambda}")
     learning_rate = args.lr
     weight_decay = args.weight_decay
-    dtype = np.float32 if args.dtype==32 else np.float16
+    dtype = torch.float32 if args.dtype==32 else torch.float16
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     max_gpu = max(min(torch.cuda.device_count()//2, 4), 1)
@@ -233,7 +251,6 @@ def main():
 
     # Create the datasets
     print(f"Create {total_num} datasets......")     
-    X = get_gridX(sizes)
     vmf_datasets = VMFDataset(rawdata_paths, sizes, dtype,samples=args.sample_num, force_reload=args.force_reload)
     datasets_loader = torch.utils.data.DataLoader(vmf_datasets,batch_size=batch_size, shuffle=False)
     model_num = len(datasets_loader)

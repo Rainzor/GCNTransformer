@@ -264,22 +264,24 @@ def main():
         max_processes = max_gpu
         processes = []
         finished_processes = 0
-        for i, dataset in enumerate(datasets_loader):
-            device_i = available_devices[i % len(available_devices)]  # Set device for each process
-            
-            p = mp.Process(target=train_process, args=(models[i], optimizers[i], dataset, hyperparams, device_i))
-            processes.append(p)
-            p.start()
-            if len(processes) >= max_processes:
-                for p in processes:
-                    p.join()
-                processes = []
-                finished_processes += max_processes
-                print(f"{finished_processes}/{model_num} models trained.")
+        with tqdm(total=model_num, desc="Training Models") as pbar:
+            for i, dataset in enumerate(datasets_loader):
+                device_i = available_devices[i % len(available_devices)]  # Set device for each process
+                
+                p = mp.Process(target=train_process, args=(models[i], optimizers[i], dataset, hyperparams, device_i))
+                processes.append(p)
+                p.start()
+                if len(processes) >= max_processes:
+                    for p in processes:
+                        p.join()
+                    processes = []
+                    finished_processes += max_processes
+                    # print(f"{finished_processes}/{model_num} models trained.")
+                    pbar.update(max_processes)
 
-        for p in processes:
-            p.join()
-        print(f"{model_num}/{model_num} models trained.")
+            for p in processes:
+                p.join()
+            pbar.update(len(processes))
         
         cost_time = time.time() - start_time
         print(f"Training completed! Total time: {cost_time//60:.0f}m {cost_time%60:.0f}s")

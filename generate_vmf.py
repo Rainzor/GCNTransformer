@@ -63,8 +63,8 @@ def train_model(model_id, vmf, optimizer, scheduler, dataset, hyperparams, devic
     vmf.train()
     best_loss = float('inf')
     patience_counter = 0
-    early_stopping_patience = 1000
-    min_delta = 0.0002
+    early_stopping_patience = 1500
+    min_delta = 0.0001
 
     # Training loop with tqdm progress bar if verbose
     if verbose:

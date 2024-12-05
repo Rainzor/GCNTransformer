@@ -82,7 +82,7 @@ def train_model(model_id, vmf, optimizer, scheduler,  dataset, hyperparams, devi
                 })
     else:
         for epoch in range(epochs):
-            update_model()
+            loss, loss_dict = update_model()
 
     if save_path is not None:
         for i, sp in enumerate(save_path):
@@ -263,6 +263,7 @@ def main():
 
         max_processes = max_gpu
         processes = []
+        finished_processes = 0
         for i, dataset in enumerate(datasets_loader):
             device_i = available_devices[i % len(available_devices)]  # Set device for each process
             
@@ -273,9 +274,12 @@ def main():
                 for p in processes:
                     p.join()
                 processes = []
+                finished_processes += max_processes
+                print(f"{finished_processes}/{model_num} models trained.")
 
         for p in processes:
             p.join()
+        print(f"{model_num}/{model_num} models trained.")
         
         cost_time = time.time() - start_time
         print(f"Training completed! Total time: {cost_time//60:.0f}m {cost_time%60:.0f}s")

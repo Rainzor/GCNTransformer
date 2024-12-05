@@ -131,6 +131,8 @@ def main():
                         help='Path to the data file. Example: datasets/raw_data/foam0/0')
     parser.add_argument('--data_num', type=int, default=-1,
                         help='Number of data files to process. Default is -1 (all).')
+    parser.add_argument('--sample_num', type=int, default=8192,
+                        help='Number of samples in each dataset. Default is 8192.')
     parser.add_argument('--batch_size', type=int, default=1,
                         help='Batch size. Default is 1.')
     parser.add_argument('--components_num', type=int, default=64,
@@ -232,7 +234,7 @@ def main():
     # Create the datasets
     print(f"Create {total_num} datasets......")     
     X = get_gridX(sizes)
-    vmf_datasets = VMFDataset(rawdata_paths, sizes, dtype,samples=100000, force_reload=args.force_reload)
+    vmf_datasets = VMFDataset(rawdata_paths, sizes, dtype,samples=args.sample_num, force_reload=args.force_reload)
     datasets_loader = torch.utils.data.DataLoader(vmf_datasets,batch_size=batch_size, shuffle=False)
     model_num = len(datasets_loader)
     batch_size_list = np.ones(model_num, dtype=int) * batch_size

@@ -185,8 +185,8 @@ class VMFDataset(Dataset):
                                                       force_reload=self.force_reload)
         
         return {
-            # "samples": raw_data.to(self.device, dtype=self.dtype),
-            "samples": raw_data.to(self.device, dtype=torch.float32),
+            "samples": raw_data.to(self.device, dtype=self.dtype),
+            # "samples": raw_data.to(self.device, dtype=torch.float32),
             "target": ray_data.reshape(-1).to(self.device, dtype=torch.float32),
             "w_data": get_gridX(self.sizes, dtype=self.dtype, device=self.device),
             "save_path": sp

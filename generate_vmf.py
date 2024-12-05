@@ -20,17 +20,18 @@ import json
 from models.model import vMFMixtureModel
 from models.loss import negative_log_likelihood
 from models.data_utils.utils import load_rawdata, get_gridX
+from models.data_utils.dataset import VMFDataset
 
-
-def train_model(model_id, vmf, optimizer, scheduler,  dataset, hyperparams, device, parent_pbar=None, save_path=None, verbose=False):
+def train_model(model_id, vmf, optimizer, scheduler,  dataset, hyperparams, device, parent_pbar=None, verbose=False):
     kl_lambda = hyperparams['kl_lambda']
     l1_lambda = hyperparams['l1_lambda']
     l2_lambda = hyperparams['l2_lambda']
-    num_epochs = hyperparams['num_epochs']
+    epochs = hyperparams['epochs']
 
-    samples = dataset["samples"].to(device, non_blocking=True)
-    target = dataset["target"].to(device, non_blocking=True)
-    w_data = dataset["w_data"].to(device, non_blocking=True)
+    samples = dataset["samples"].to(device, non_blocking=True) # Shape: (bz, data_sizes, 3)
+    target = dataset["target"].to(device, non_blocking=True) # Shape: (bz, sizes)
+    w_data = dataset["w_data"].to(device, non_blocking=True) # Shape: (bz, sizes, 3)
+    save_path = dataset.get("save_path", None) # Save path for the trained model
 
     def update_model():
         optimizer.zero_grad()
@@ -42,18 +43,19 @@ def train_model(model_id, vmf, optimizer, scheduler,  dataset, hyperparams, devi
         )
         loss.backward()
         optimizer.step()
-        scheduler.step()
+        if loss.item() < 5:
+            scheduler.step()
         return loss, loss_dict
 
     vmf.train()
     best_loss = float('inf')
     patience_counter = 0
     early_stopping_patience = 1000
-    min_delta = 0.0002
+    min_delta = 0.0001
     if verbose:
         loss_history = []
-        with tqdm(total=num_epochs, desc=f'Model {model_id} Training', leave=False) as pbar:
-            for epoch in range(num_epochs):
+        with tqdm(total=epochs, desc=f'Model {model_id} Training', leave=False) as pbar:
+            for epoch in range(epochs):
                 loss, loss_dict = update_model()
                 loss_history.append(loss.item())
                 pbar.set_postfix({
@@ -79,18 +81,25 @@ def train_model(model_id, vmf, optimizer, scheduler,  dataset, hyperparams, devi
                         'step': f'{epoch}'
                 })
     else:
-        for epoch in range(num_epochs):
+        for epoch in range(epochs):
             update_model()
 
     if save_path is not None:
-        torch.save(vmf.state_dict(), save_path)
+        for i, sp in enumerate(save_path):
+            state_dict = {
+                "w_logits": vmf.w_logits[i].cpu(),
+                "theta_phi": vmf.theta_phi[i].cpu(),
+                "log_kappa": vmf.log_kappa[i].cpu()
+            }
+            torch.save(state_dict, sp)
+
 
 def train_process(model, optimizer, dataset, hyperparams, device, save_path):
     # 将模型、数据加载到指定设备
     model.to(device)
-    dataset['samples'] = dataset['samples'].to(device)
-    dataset['target'] = dataset['target'].to(device)
-    dataset['w_data'] = dataset['w_data'].to(device)
+    dataset['samples'] = dataset['samples'].to(device) # Shape: (bz, data_sizes, 3)
+    dataset['target'] = dataset['target'].to(device) # Shape: (bz, data_sizes)
+    dataset['w_data'] = dataset['w_data'].to(device) # Shape: (bz, data_sizes, 3)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.5)
     # 开始训练
     train_model(0, model, optimizer, scheduler, dataset, hyperparams, device, save_path=save_path)
@@ -120,20 +129,22 @@ def main():
                         help='Base path for data files. Example: datasets/')
     parser.add_argument('--data_path', type=str, default='',
                         help='Path to the data file. Example: datasets/raw_data/foam0/0')
-    parser.add_argument('--num_data', type=int, default=-1,
+    parser.add_argument('--data_num', type=int, default=-1,
                         help='Number of data files to process. Default is -1 (all).')
-    parser.add_argument('--num_components', type=int, default=64,
+    parser.add_argument('--batch_size', type=int, default=1,
+                        help='Batch size. Default is 1.')
+    parser.add_argument('--components_num', type=int, default=64,
                         help='Number of components in the vMF mixture model. Default is 64.')
-    parser.add_argument('--num_epochs', type=int, default=10000,
+    parser.add_argument('--epochs', type=int, default=10000,
                         help='Number of training epochs. Default is 10000.')
-    parser.add_argument('--kl_lambda', type=float, default=1.0,
+    parser.add_argument('--kl', type=float, default=1.0,
                         help='Weight for KL divergence. Default is 1.')
-    parser.add_argument('--l1_lambda', type=float, default=10.0,
+    parser.add_argument('--l1', type=float, default=10.0,
                         help='Weight for L1 regularization. Default is 10.')
-    parser.add_argument('--l2_lambda', type=float, default=0.5,
+    parser.add_argument('--l2', type=float, default=0.5,
                         help='Weight for L2 regularization. Default is 0.5.')
-    parser.add_argument('--learning_rate', type=float, default=1e-2,
-                        help='Learning rate. Default is 5e-3.')
+    parser.add_argument('--learning_rate', type=float, default=5e-2,
+                        help='Learning rate. Default is 5e-2.')
     parser.add_argument('--weight_decay', type=float, default=1e-5,
                         help='Weight decay (for Adam optimizer). Default is 1e-5.')
     parser.add_argument('--sizes', type=str, default='64,64',
@@ -142,6 +153,10 @@ def main():
                         help="Data type of raw data. Default is 32 (float32).")
     parser.add_argument('--multi_gpu', action='store_true',
                         help='Whether using multi-GPU training.')
+
+    parser.add_argument('--force_reload', action='store_true',
+                        help='Whether to force reload the data.')   
+
     args = parser.parse_args()
     if args.data_path=="" and args.base_path=="":
         print("Error: Either --data_path or --base_path must be specified.")
@@ -150,20 +165,24 @@ def main():
         print(f"Training vMF mixture models with the datasets in {args.base_path}")
     else:
         print(f"Training vMF mixture models with the dataset in {args.data_path}")
-    # 初始化参数
+
+    # Initialize hyperparameters
     base_path = args.base_path
     data_path = args.data_path
-    num_components = args.num_components
-    num_epochs = args.num_epochs
-    kl_lambda = args.kl_lambda
-    l1_lambda = args.l1_lambda
-    l2_lambda = args.l2_lambda
+    batch_size = args.batch_size
+    components_num = args.components_num
+    epochs = args.epochs
+    kl_lambda = args.kl
+    l1_lambda = args.l1
+    l2_lambda = args.l2
+    print(f"kl_lambda: {kl_lambda}, l1_lambda: {l1_lambda}, l2_lambda: {l2_lambda}")
     learning_rate = args.learning_rate
     weight_decay = args.weight_decay
     dtype = np.float32 if args.dtype==32 else np.float16
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    max_gpu = min(torch.cuda.device_count(), 4)
+    max_gpu = max(min(torch.cuda.device_count()//2, 4), 1)
+
     available_devices = [torch.device(f'cuda:{i}') for i in range(max_gpu)]
     print(f"Available devices number: {len(available_devices)}")
 
@@ -173,10 +192,12 @@ def main():
         "kl_lambda": kl_lambda,
         "l1_lambda": l1_lambda,
         "l2_lambda": l2_lambda,
-        "num_epochs": num_epochs
+        "epochs": epochs,
     }
-    rawdata_paths = [] 
 
+
+    # Get the paths of the raw data files
+    rawdata_paths = [] 
     if data_path=="":
         if not os.path.isdir(base_path):
             print(f"Error: The base path '{base_path}' does not exist.")
@@ -198,50 +219,56 @@ def main():
         print("Error: Either --data_path or --base_path must be specified.")
         sys.exit(1)
 
-    num_models = len(rawdata_paths)
+    total_num = len(rawdata_paths)
     
-    if args.num_data > 0:
-        num_models = min(args.num_data, num_models)
-        rawdata_paths = rawdata_paths[:num_models]
+    if args.data_num > 0:
+        total_num = min(args.data_num, total_num)
+        rawdata_paths = rawdata_paths[:total_num]
     
-    if num_models == 0:
+    if total_num == 0:
         print("Error: No data files found.")
         sys.exit(1)
-        
+
+    # Create the datasets
+    print(f"Create {total_num} datasets......")     
     X = get_gridX(sizes)
-    print(f"Training {num_models} models......")
+    vmf_datasets = VMFDataset(rawdata_paths, sizes, dtype,samples=100000, force_reload=args.force_reload)
+    datasets_loader = torch.utils.data.DataLoader(vmf_datasets,batch_size=batch_size, shuffle=False)
+    model_num = len(datasets_loader)
+
+    # Train the models
     if args.multi_gpu:
         print(f"Using multi-GPU training.")
         start_time = time.time()
+
         models = []
         optimizers = []
-        for i in range(num_models):
+        schedulers = []
+        for i in range(model_num):
+            local_bz = len(dataset[i]['save_path'])
             device_i = available_devices[i % len(available_devices)]  # Set device for each process
-            vmf = vMFMixtureModel(num_components=num_components).to(device_i)
-            optimizer = torch.optim.Adam(vmf.parameters(), lr=learning_rate, weight_decay=weight_decay)
+            vmf = vMFMixtureModel(components_num=components_num,
+                                batch_size=local_bz
+                                ).to(device_i)
+            optimizer = torch.optim.Adam(vmf.parameters(), 
+                                lr=learning_rate, 
+                                weight_decay=weight_decay)
             models.append(vmf)
             optimizers.append(optimizer)
+            schedulers.append(torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.5))
+
         max_processes = max_gpu
         processes = []
-        for i in range(num_models):
+        for i, dataset in enumerate(datasets_loader):
             device_i = available_devices[i % len(available_devices)]  # Set device for each process
-
-            rp, sp = rawdata_paths[i]
-            raw_data, ray_data = load_rawdata(rp, sizes, verbose=False, dtype=dtype)
-            dataset = {
-                "samples": raw_data.to(device_i),
-                "target": ray_data.reshape(-1).to(device_i),
-                "w_data": X.clone().to(device_i)
-            }
             
-            p = mp.Process(target=train_process, args=(
-                models[i], optimizers[i], dataset, hyperparams, device_i, sp))
+            p = mp.Process(target=train_model, args=(i, models[i], optimizers[i], schedulers[i], dataset, hyperparams, device_i))
             processes.append(p)
             p.start()
             if len(processes) >= max_processes:
                 for p in processes:
-                    p.join()  # 等待当前批次进程完成
-                processes = []  # 清空已完成的进程列表
+                    p.join()
+                processes = []
 
         for p in processes:
             p.join()
@@ -249,34 +276,26 @@ def main():
         cost_time = time.time() - start_time
         print(f"Training completed! Total time: {cost_time//60:.0f}m {cost_time%60:.0f}s")
     else:
-        save_paths = []
         datasets = []
         optimizers = [] 
         models = []
         schedulers = []   
-        print(f"Loading {num_models} datasets......")     
-        for i in range(num_models):
-            # Create model, optimizer, scheduler
-            vmf = vMFMixtureModel(num_components=num_components).to(device)
-            optimizer = torch.optim.Adam(vmf.parameters(), lr=learning_rate, weight_decay=weight_decay)
-            models.append(vmf)
-            optimizers.append(optimizer)
-            schedulers.append(torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.5))
-            
-            # Load raw data
-            rp, sp = rawdata_paths[i]
-            raw_data, ray_data = load_rawdata(rp, sizes, verbose=False, dtype=dtype)
-            dataset = {
-                "samples": raw_data.to(device),
-                "target": ray_data.reshape(-1).to(device),
-                "w_data": X.clone().to(device)
-            }
-            datasets.append(dataset)
-            save_paths.append(sp)
 
-        with tqdm(total=num_models, desc='Training Models') as pbar:
-            for i in range(num_models):
-                train_model(i, models[i], optimizers[i], schedulers[i], datasets[i], hyperparams, device, parent_pbar=pbar, save_path=save_paths[i], verbose=True)
+        vmf_datasets = VMFDataset(rawdata_paths, sizes, dtype,samples=100000, force_reload=True)
+        datasets_loader = torch.utils.data.DataLoader(vmf_datasets, batch_size=batch_size, shuffle=False)
+        model_num = len(datasets_loader)
+
+        print(f"Training {model_num} models......")
+        with tqdm(total=model_num, desc='Training Models') as pbar:
+            for i, dataset in enumerate(datasets_loader):
+                # Create a new model for each dataset
+                local_bz = len(dataset['save_path'])
+                model = vMFMixtureModel(components_num=components_num, batch_size=local_bz).to(device)
+                optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate*math.sqrt(local_bz), weight_decay=weight_decay)
+                scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.5)
+
+                # Train the model
+                train_model(i, model, optimizer, scheduler, dataset, hyperparams, device, parent_pbar=pbar, verbose=True)
                 pbar.update(1)
         
         print(f"Training completed!")

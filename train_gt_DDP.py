@@ -257,8 +257,8 @@ def main():
 
     # Define hyperparameters
     hyperparameters = {
-        'num_features': datasets[0].x.size(1),
-        'transformer_width': 256,
+        'nfeat_node': datasets[0].x.size(1),
+        'transformer_dim': 256,
         'transformer_layers': 4,
         'transformer_heads': 8,
         'embedding_dim': 64,
@@ -275,8 +275,8 @@ def main():
 
     # Initialize model
     model = GraphTransformer(
-        num_features=hyperparameters['num_features'],
-        transformer_width=hyperparameters['transformer_width'],
+        nfeat_node=hyperparameters['nfeat_node'],
+        transformer_dim=hyperparameters['transformer_dim'],
         transformer_layers=hyperparameters['transformer_layers'],
         transformer_heads=hyperparameters['transformer_heads'],
         hidden_dim=hyperparameters['hidden_dim'],

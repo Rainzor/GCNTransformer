@@ -8,8 +8,8 @@ import json
 from torch_geometric.data import InMemoryDataset, Data
 from torch_geometric.data import DataLoader
 from collections import deque, defaultdict
-from models.data_utils.utils import sort_nodes_and_edges_bfs, sort_nodes_and_edges
-
+from models.data_utils.utils import sort_nodes_and_edges_bfs, sort_nodes_and_edges, load_rawdata, get_gridX
+from torch.utils.data import Dataset
 
 class FoamDataset(InMemoryDataset):
     def __init__(self, root, json_path, sizes, 
@@ -164,3 +164,30 @@ class FoamDataset(InMemoryDataset):
         vmf_data = vmf_data[sorted_indices,:]
         vmf_data = torch.flatten(vmf_data)
         return vmf_data.to(device)
+class VMFDataset(Dataset):
+    def __init__(self, rawdata_paths, sizes, dtype, samples=8192, device='cpu', force_reload=False):
+        self.rawdata_paths = rawdata_paths
+        self.sizes = sizes
+        self.dtype = dtype
+        self.device = device
+        self.samples = samples
+        self.force_reload = force_reload
+
+
+    def __len__(self):
+        return len(self.rawdata_paths)
+
+    def __getitem__(self, idx):
+        rp, sp = self.rawdata_paths[idx]
+        raw_data, ray_data = load_rawdata(rp, self.sizes,
+                                    samples=self.samples,
+                                    device=self.device, 
+                                    verbose=False, dtype=self.dtype, 
+                                    force_reload=self.force_reload)
+        
+        return {
+            "samples": raw_data,
+            "target": ray_data.reshape(-1),
+            "w_data": get_gridX(self.sizes),
+            "save_path": sp
+        }

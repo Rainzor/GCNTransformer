@@ -83,21 +83,40 @@ def get_gridX(sizes, device='cpu'):
     return X
 
 # Load raw data: ray position and ray direction
-def load_rawdata(filename, sizes, device='cpu', verbose=False, dtype=np.float32):
+def load_rawdata(filename, sizes,  
+                samples = 8192, 
+                dtype=np.float32, 
+                force_reload=False,
+                verbose=False,
+                device='cpu'):
+    dirname = os.path.dirname(filename)
+    base_filename = os.path.splitext(os.path.basename(filename))[0]
+    save_path = os.path.join(dirname, f"{base_filename}.pth")
 
-    rawdata = np.fromfile(filename, dtype=dtype)
-    
-    # 如果是 float16，转换为 float32
+    if os.path.exists(save_path) and not force_reload:
+        if verbose:
+            print(f"Loading cached data from {save_path}...")
+        cached_data = torch.load(save_path, map_location=device, weights_only=True)
+        rawdata_tensor = cached_data["raw"]
+        raydata_tensor = cached_data["ray"]
+        if verbose:
+            print("ray data shape:", raydata_tensor.shape)
+            print("raw data shape:", rawdata_tensor.shape)
+        return rawdata_tensor, raydata_tensor
+
+    rawdata_np = np.fromfile(filename, dtype=dtype)
+
+    # If the data is in float16, convert it to float32
     if dtype == np.float16:
         if verbose:
             print(f"Converting data from float16 to float32")
-        rawdata = rawdata.astype(np.float32)
-    rawdata = rawdata.reshape(-1, 4)
-    # print(rawdata.shape)
-    x = rawdata[:,0]
+        rawdata_np = rawdata_np.astype(np.float32)
+    rawdata_np = rawdata_np.reshape(-1, 4)
+    # print(rawdata_np.shape)
+    x = rawdata_np[:,0]
     # print(np.max(data[:,1]))
-    phi = rawdata[:,1]-np.pi
-    r = np.sqrt(1 - x**2)
+    phi = rawdata_np[:,1]-np.pi
+    r = np.sqrt(1 - x*x)
     y = r * np.cos(phi)
     z = r * np.sin(phi)
 
@@ -108,20 +127,23 @@ def load_rawdata(filename, sizes, device='cpu', verbose=False, dtype=np.float32)
 
     # Statistics of ray data
     H, _, _ = np.histogram2d(x, phi, bins=[x_edges, phi_edges])
-    ray_data = torch.tensor(H, dtype=torch.float32, device=device).reshape(-1, 1)
-    if ray_data.shape[0] != sizes[0] * sizes[1]:
+    raydata_tensor = torch.tensor(H, dtype=torch.float32, device=device).reshape(-1, 1)
+    if raydata_tensor.shape[0] != sizes[0] * sizes[1]:
         print("Error: ray data shape mismatch!")
         sys.exit(1)
-    area = 4 * math.pi / (ray_data.shape[0])
-    ray_data = ray_data / torch.sum(ray_data) / area
+    area = 4 * math.pi / (raydata_tensor.shape[0])
+    raydata_tensor = raydata_tensor / torch.sum(raydata_tensor) / area
     
-    raw_X = np.column_stack((x, y, z))
-    raw_num = min(8192, raw_X.shape[0])
-    raw_X = raw_X[np.random.choice(raw_X.shape[0], raw_num, replace=False), :]
-
-    raw_data = torch.tensor(raw_X, dtype=torch.float32, device=device)
+    raw_X = np.stack((x, y, z), axis=1)
+    raw_X = np.random.permutation(raw_X)
+    raw_num = min(samples, raw_X.shape[0])
+    raw_X = raw_X[:raw_num, :]
+    rawdata_tensor = torch.tensor(raw_X, dtype=torch.float32, device=device)
     
     if verbose:
-        print("ray data shape:", ray_data.shape)
-        print("raw data shape:", raw_data.shape)
-    return raw_data, ray_data
+        print("ray data shape:", raydata_tensor.shape)
+        print("raw data shape:", rawdata_tensor.shape)
+
+    torch.save({"raw": rawdata_tensor, "ray": raydata_tensor}, save_path)
+
+    return rawdata_tensor, raydata_tensor

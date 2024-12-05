@@ -287,39 +287,39 @@ class GraphTransformer(nn.Module):
 
 
 class vMFMixtureModel(nn.Module):
-    def __init__(self, num_components):
+    def __init__(self, components_num, batch_size = 1):
         super(vMFMixtureModel, self).__init__()
-        self.num_components = num_components
-
+        self.components_num = components_num
+        self.batch_size = batch_size
         # 混合系数的对数几率
-        self.w_logits = nn.Parameter(torch.randn(num_components))
+        self.w_logits = nn.Parameter(torch.randn(batch_size, components_num))
 
         # 角度参数 theta 和 phi
-        self.theta_phi = nn.Parameter(torch.randn(2 * num_components)*3)
+        self.theta_phi = nn.Parameter(torch.randn(batch_size, 2 * components_num)*3)
 
         # 浓度参数的对数
-        self.log_kappa = nn.Parameter(torch.randn(num_components))
+        self.log_kappa = nn.Parameter(torch.randn(batch_size, components_num))
 
     def forward(self):
-        # 计算混合系数
-        weight = F.softmax(self.w_logits, dim=0)
-
-        # 使用 sigmoid 将 theta 和 phi 限制在 [0,1]
+        # Compute the weights
+        weight = F.softmax(self.w_logits, dim=-1)  
+        weight = weight.unsqueeze(-1) # [batch_size, components_num, 1]
+        # Sigmoid mapping [0, 1]
         theta_phi = torch.sigmoid(self.theta_phi)
 
-        # 映射到实际角度范围
-        theta = theta_phi[:self.num_components] * math.pi          # [0, π]
-        phi = theta_phi[self.num_components:] * 2 * math.pi        # [0, 2π]
+        # to [0, π] and [0, 2π]
+        theta = theta_phi[: , :self.components_num] * math.pi          # [0, π]
+        phi = theta_phi[:, self.components_num:] * 2 * math.pi        # [0, 2π]
 
-        # 计算球坐标系下的 μ
+        # Spherical coordinates
         cos_theta = torch.cos(theta)
         sin_theta = torch.sin(theta)
         cos_phi = torch.cos(phi)
         sin_phi = torch.sin(phi)
-        mu = torch.stack((sin_theta * cos_phi, sin_theta * sin_phi, cos_theta), dim=1)  # Shape: (num_components, 3)
+        mu = torch.stack((sin_theta * cos_phi, sin_theta * sin_phi, cos_theta), dim=-1) # Shape: (batch_size,components_num, 3)
 
-        # 计算浓度参数
-        kappa = torch.exp(self.log_kappa)
-        # kappa = torch.clamp(kappa, min=1e-10, max=1e5)  # 限制 kappa 的最大值，防止数值不稳定
+        # Concentration parameter
+        kappa = torch.exp(self.log_kappa).unsqueeze(-1) # [batch_size, components_num, 1]
+        # kappa = torch.clamp(kappa, min=1e-10, max=1e5) 
 
         return weight, mu, kappa

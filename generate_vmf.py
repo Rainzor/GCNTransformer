@@ -94,7 +94,7 @@ def train_model(model_id, vmf, optimizer, scheduler,  dataset, hyperparams, devi
             torch.save(state_dict, sp)
 
 
-def train_process(model, optimizer, dataset, hyperparams, device, save_path):
+def train_process(model, optimizer, dataset, hyperparams, device):
     # 将模型、数据加载到指定设备
     model.to(device)
     dataset['samples'] = dataset['samples'].to(device) # Shape: (bz, data_sizes, 3)
@@ -102,7 +102,7 @@ def train_process(model, optimizer, dataset, hyperparams, device, save_path):
     dataset['w_data'] = dataset['w_data'].to(device) # Shape: (bz, data_sizes, 3)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.5)
     # 开始训练
-    train_model(0, model, optimizer, scheduler, dataset, hyperparams, device, save_path=save_path)
+    train_model(0, model, optimizer, scheduler, dataset, hyperparams, device)
 
 
 def getpath(output_json_path):
@@ -247,7 +247,7 @@ def main():
 
         models = []
         optimizers = []
-        schedulers = []
+        # schedulers = []
         for i in range(model_num):
             local_bz = batch_size_list[i]
             device_i = available_devices[i % len(available_devices)]  # Set device for each process
@@ -259,14 +259,14 @@ def main():
                                 weight_decay=weight_decay)
             models.append(vmf)
             optimizers.append(optimizer)
-            schedulers.append(torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.5))
+            # schedulers.append(torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.5))
 
         max_processes = max_gpu
         processes = []
         for i, dataset in enumerate(datasets_loader):
             device_i = available_devices[i % len(available_devices)]  # Set device for each process
             
-            p = mp.Process(target=train_model, args=(i, models[i], optimizers[i], schedulers[i], dataset, hyperparams, device_i))
+            p = mp.Process(target=train_process, args=(models[i], optimizers[i], dataset, hyperparams, device_i))
             processes.append(p)
             p.start()
             if len(processes) >= max_processes:

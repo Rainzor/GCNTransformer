@@ -58,10 +58,9 @@ def log_sample_plots(model, datasets, X, sizes, writer, tag, num_samples=4, devi
         sample = sample.to(device)
         
         with torch.no_grad():
+            model.eval()
             # Get model predictions
-            weights, mus, kappas = model.vmf_param(
-                sample.x, sample.edge_index, sample.pos, sample.batch
-            )
+            weights, mus, kappas = model.vmf_param(sample,is_diff=True)
             img_predict = multi_vmf(weights.squeeze(), mus.squeeze(), kappas.squeeze(), X).cpu().numpy()
             img_predict = img_predict.reshape(sizes)
 

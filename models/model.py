@@ -17,13 +17,14 @@ class TransformerLayer(nn.Module):
     def __init__(self,
                 d_model,
                 n_head,
-                dim_feedforward=2048,
+                d_context=None,
+                d_feedforward=2048,
                 dropout=0.0,
                 activation=F.relu):
         super(TransformerLayer, self).__init__()
-        self.self_attn = nn.MultiheadAttention(d_model, n_head)
+        self.cross_attn = nn.MultiheadAttention(d_model, n_head, kdim=d_context, vdim=d_context)
 
-        self.feedforward = MLP(d_model, dim_feedforward, d_model, num_layers=2, activation=activation)
+        self.feedforward = MLP(d_model, d_feedforward, d_model, num_layers=2, activation=activation)
 
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
@@ -31,20 +32,21 @@ class TransformerLayer(nn.Module):
         self.dropout1 = nn.Dropout(dropout)
         self.dropout2 = nn.Dropout(dropout)
     
-    def _sa_block(self, x, attn_mask, key_padding_mask):
-        x = self.self_attn(x, x, x, attn_mask=attn_mask, key_padding_mask=key_padding_mask)[0]
+    def _ca_block(self, x, context, attn_mask, key_padding_mask):
+        context = default(context, x)
+        x = self.cross_attn(x, context, context, attn_mask=attn_mask, key_padding_mask=key_padding_mask)[0]
         return self.dropout1(x)
 
     def _ff_block(self, x):
         return self.dropout2(self.feedforward(x))
 
-    def forward(self, x, attn_mask=None, key_padding_mask=None):
-        x = x + self._sa_block(self.norm1(x), attn_mask, key_padding_mask)
+    def forward(self, x, context = None, attn_mask=None, key_padding_mask=None):
+        x = x + self._ca_block(self.norm1(x),context, attn_mask, key_padding_mask)
         x = x + self._ff_block(self.norm2(x))
         return x
     
     def reset_parameters(self):
-        self.self_attn.reset_parameters()
+        self.cross_attn.reset_parameters()
         self.feedforward.reset_parameters()
         self.norm1.reset_parameters()
         self.norm2.reset_parameters()
@@ -54,11 +56,15 @@ class TransformerEncoder(nn.Module):
                 d_model,
                 n_head,
                 num_layers,
-                dim_feedforward=2048,
+                d_feedforward=2048,
                 dropout=0.0):
         super(TransformerEncoder, self).__init__()
         self.layers = nn.ModuleList([
-            TransformerLayer(d_model, n_head, dim_feedforward, dropout, GELU())
+            TransformerLayer(d_model, n_head, 
+                            d_context=None,
+                            d_feedforward=d_feedforward,
+                            dropout=dropout,
+                            activation=GELU())
             for _ in range(num_layers)
         ])
     
@@ -72,6 +78,33 @@ class TransformerEncoder(nn.Module):
             x = layer(x, attn_mask, key_padding_mask)
         return x
     
+    def reset_parameters(self):
+        for layer in self.layers:
+            layer.reset_parameters()
+
+class TransformerDecoder(nn.Module):
+    def __init__(self,
+                d_model,
+                n_head,
+                d_context,
+                num_layers,
+                dim_feedforward=2048,
+                dropout=0.0):
+        super(TransformerDecoder, self).__init__()
+        self.layers = nn.ModuleList([
+            TransformerLayer(d_model, n_head, 
+                            d_context=d_context,
+                            dim_feedforward=dim_feedforward,
+                            dropout=dropout,
+                            activation=GELU())
+            for _ in range(num_layers)
+        ])
+
+    def forward(self, x, context, attn_mask=None, key_padding_mask=None):
+        for layer in self.layers:
+            x = layer(x, context, attn_mask, key_padding_mask)
+        return x
+
     def reset_parameters(self):
         for layer in self.layers:
             layer.reset_parameters()
@@ -96,7 +129,7 @@ class GraphTransformer(nn.Module):
         patch_rw_dim=0
     ):
         super(GraphTransformer, self).__init__()
-        assert pool in ['cls', 'mean'], "pool must be either 'cls' or 'mean'"
+        assert pool in ['cls', 'mean','cross'], "pool must be either 'cls', 'mean' or 'cross'"
         self.nfeat_node = nfeat_node
         self.output_dim = output_dim
         self.pool = pool
@@ -129,7 +162,7 @@ class GraphTransformer(nn.Module):
                             d_model=transformer_dim,
                             n_head=transformer_heads,
                             num_layers=transformer_layers,
-                            dim_feedforward=transformer_dim*2
+                            d_feedforward=transformer_dim*2
                             # dropout=dropout
                         )
 
@@ -267,8 +300,8 @@ class GraphTransformer(nn.Module):
             out = out.view(batch_size, num_vmf, 4)  # [batch_size, num_vmf, 4]
             
             # Get the vMF parameters
-            weights = F.softmax(out[:, :, 0], dim=-1)  # [batch_size, num_vmf]
-            kappas = torch.exp(out[:, :, 1])           # [batch_size, num_vmf]
+            weights = F.softmax(out[:, :, 0], dim=-1).unsqueeze(-1)  # [batch_size, num_vmf,1]
+            kappas = torch.exp(out[:, :, 1]).unsqueeze(-1)         # [batch_size, num_vmf]
             theta = torch.sigmoid(out[:, :, 2]) * math.pi  # [batch_size, num_vmf]
             phi = torch.sigmoid(out[:, :, 3]) * math.pi * 2  # [batch_size, num_vmf]
             

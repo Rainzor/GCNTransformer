@@ -105,9 +105,9 @@ def train_model(model_id, vmf, optimizer, scheduler, dataset, hyperparams, devic
     if save_path is not None:
         for i, sp in enumerate(save_path):
             state_dict = {
-                "w_logits": vmf.w_logits[i].cpu(),
-                "theta_phi": vmf.theta_phi[i].cpu(),
-                "log_kappa": vmf.log_kappa[i].cpu()
+                "w_logits": vmf.w_logits[i].clone().detach().cpu(),
+                "theta_phi": vmf.theta_phi[i].clone().detach().cpu(),
+                "log_kappa": vmf.log_kappa[i].clone().detach().cpu(),
             }
             torch.save(state_dict, sp)
 

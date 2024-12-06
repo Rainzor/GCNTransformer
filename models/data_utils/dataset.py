@@ -153,17 +153,19 @@ class FoamDataset(InMemoryDataset):
         Loads vmf data from parameter file.
         """
         parameters = torch.load(vmf_path, map_location=device, weights_only=True)
-        w_logits = parameters['w_logits']
-        theta_phi = parameters['theta_phi']
-        log_kappa = parameters['log_kappa']
+        w_logits = parameters['w_logits'].detach()
+        theta_phi = parameters['theta_phi'].detach()
+        log_kappa = parameters['log_kappa'].detach()
         theta = theta_phi[:log_kappa.size(0)]
         phi = theta_phi[log_kappa.size(0):]
         indices = np.lexsort((-phi.cpu().numpy(), -theta.cpu().numpy(), -log_kappa.cpu().numpy(), -w_logits.cpu().numpy()))
         sorted_indices = torch.tensor(indices)
-        vmf_data = torch.stack([w_logits,log_kappa,theta,phi], dim=1)
+        vmf_data = torch.stack([w_logits, log_kappa, theta, phi], dim=1) # Shape [num_nodes, 4]
         vmf_data = vmf_data[sorted_indices,:]
-        vmf_data = torch.flatten(vmf_data)
+        # vmf_data = torch.flatten(vmf_data) # Shape [num_nodes * 4]
         return vmf_data.to(device)
+
+        
 class VMFDataset(Dataset):
     def __init__(self, rawdata_paths, sizes, dtype, samples=8192, device='cpu', force_reload=False):
         self.rawdata_paths = rawdata_paths
